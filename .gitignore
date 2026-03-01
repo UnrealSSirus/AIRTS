@@ -20,3 +20,6 @@ build/
 *.swp
 *.swo
 *~
+.claude
+replays/
+CLAUDE.md

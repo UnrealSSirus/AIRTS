@@ -1,5 +1,10 @@
 """Central configuration for colors, physics, combat, and GUI tuning."""
 
+# -- timing / fixed timestep ------------------------------------------------
+TICK_RATE = 60
+FIXED_DT = 1.0 / TICK_RATE
+MAX_FRAME_DT = 0.25
+
 # -- teams / selection ------------------------------------------------------
 SELECTED_COLOR = (0, 255, 100)
 DEFAULT_COLOR = (255, 255, 255)

@@ -1,7 +1,7 @@
 """Game class — owns the loop, wires systems together."""
 from __future__ import annotations
 import math
-import sys
+from typing import Any
 import pygame
 
 from entities.base import Entity
@@ -23,8 +23,25 @@ from entities.metal_extractor import MetalExtractor
 from config.settings import (
     SELECTION_FILL_COLOR, SELECTION_RECT_COLOR,
     COMMAND_PATH_COLOR, COMMAND_DOT_COLOR, PATH_SAMPLE_MIN_DIST,
+    FIXED_DT, MAX_FRAME_DT,
 )
+from entities.shapes import RectEntity, CircleEntity, PolygonEntity
+from systems.replay import ReplayRecorder
+from systems.stats import GameStats
+from ui.widgets import Slider
 import gui
+
+# Type registry for deserialization dispatch
+_ENTITY_TYPES: dict[str, type] = {
+    "Entity": Entity,
+    "RectEntity": RectEntity,
+    "CircleEntity": CircleEntity,
+    "PolygonEntity": PolygonEntity,
+    "Unit": Unit,
+    "CommandCenter": CommandCenter,
+    "MetalSpot": MetalSpot,
+    "MetalExtractor": MetalExtractor,
+}
 
 
 class Game:
@@ -35,11 +52,17 @@ class Game:
         title: str = "AIRTS",
         map_generator: BaseMapGenerator | None = None,
         team_ai: dict[int, BaseAI] | None = None,
+        screen: pygame.Surface | None = None,
+        clock: pygame.time.Clock | None = None,
+        replay_config: dict | None = None,
     ):
         """
         *team_ai* maps team numbers to AI controllers.  Teams **not** present
         in the dict are human-controlled.  At least one team must have an AI
         (Human-vs-Human is not supported).
+
+        When *screen* and *clock* are provided (by the App controller),
+        the Game will use them instead of creating its own.
 
         Examples::
 
@@ -47,12 +70,18 @@ class Game:
             team_ai={1: MyAI()}              # AI (T1) vs Human (T2)
             team_ai={1: MyAI(), 2: WanderAI()} # AI vs AI (spectator)
         """
-        pygame.init()
+        if screen is None:
+            pygame.init()
+            self.screen = pygame.display.set_mode((width, height))
+            pygame.display.set_caption(title)
+            self._owns_pygame = True
+        else:
+            self.screen = screen
+            self._owns_pygame = False
+
         self.width = width
         self.height = height
-        self.screen = pygame.display.set_mode((width, height))
-        pygame.display.set_caption(title)
-        self.clock = pygame.time.Clock()
+        self.clock = clock or pygame.time.Clock()
         self.running = False
         self.fps = 60
 
@@ -65,12 +94,19 @@ class Game:
             e for e in self.entities if isinstance(e, MetalSpot)
         ]
 
+        self._next_entity_id: int = 1
+        self._speed_multiplier: float = 1.0
+        self._accumulator: float = 0.0
+        self._assign_entity_ids()
+
         self.team_ai: dict[int, BaseAI] = team_ai if team_ai is not None else {2: WanderAI()}
         self.human_teams: set[int] = {1, 2} - set(self.team_ai.keys())
         if self.human_teams == {1, 2}:
             raise ValueError("Human-vs-Human is not supported; at least one team must have an AI.")
 
         self._iteration = 0
+        self._winner = 0  # 0 = undecided, 1 or 2 = that team won
+        self._stats = GameStats()
 
         self._apply_selectability()
         self._bind_and_start_ais()
@@ -84,7 +120,17 @@ class Game:
         self._rdragging = False
         self._rpath: list[tuple[float, float]] = []
 
+        self._speed_slider = Slider(width - 170, 10, 150, "Speed %", 25, 800, 100, 25)
+
+        self._replay_recorder = ReplayRecorder(width, height, replay_config)
+
     # -- init helpers -------------------------------------------------------
+
+    def _assign_entity_ids(self):
+        for e in self.entities:
+            if e.entity_id == 0:
+                e.entity_id = self._next_entity_id
+                self._next_entity_id += 1
 
     def _apply_selectability(self):
         for e in self.entities:
@@ -93,7 +139,7 @@ class Game:
 
     def _bind_and_start_ais(self):
         for team_id, ai in self.team_ai.items():
-            ai._bind(team_id, self)
+            ai._bind(team_id, self, stats=self._stats)
             ai.on_start()
 
     # -- queries ------------------------------------------------------------
@@ -174,6 +220,8 @@ class Game:
         for entity in self.entities:
             if isinstance(entity, CommandCenter) and entity.selected:
                 entity.rally_point = rally
+                if entity.team in self.human_teams:
+                    self._stats.record_action(entity.team)
 
     def _assign_path_goals(self):
         selected = [e for e in self.entities if isinstance(e, Unit) and e.selected]
@@ -182,6 +230,8 @@ class Game:
                 px, py = self._rpath[0]
                 for u in selected:
                     u.move(px, py)
+                    if u.team in self.human_teams:
+                        self._stats.record_action(u.team)
             return
 
         goals = self._resample_path(len(selected))
@@ -200,6 +250,8 @@ class Game:
             if best_idx >= 0:
                 selected[best_idx].move(gx, gy)
                 assigned.add(best_idx)
+                if selected[best_idx].team in self.human_teams:
+                    self._stats.record_action(selected[best_idx].team)
 
     # -- events -------------------------------------------------------------
 
@@ -208,7 +260,10 @@ class Game:
             if event.type == pygame.QUIT:
                 self.running = False
 
-            elif event.type == pygame.KEYDOWN:
+            if self._speed_slider.handle_event(event):
+                self._speed_multiplier = self._speed_slider.value / 100.0
+
+            if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     self.running = False
 
@@ -277,13 +332,14 @@ class Game:
         for ai in self.team_ai.values():
             ai.on_step(self._iteration)
 
-        capture_step(self.entities, ccs, units, self.metal_spots, metal_extractors, dt)
-        combat_step(units, ccs, metal_extractors, obstacles, self.laser_flashes, dt)
-        medic_heal_step(units, dt)
-        cc_heal_step(ccs, units, dt)
-        spawn_step(self.entities, ccs, self.human_teams)
+        capture_step(self.entities, ccs, units, self.metal_spots, metal_extractors, dt, stats=self._stats)
+        combat_step(units, ccs, metal_extractors, obstacles, self.laser_flashes, dt, stats=self._stats)
+        medic_heal_step(units, dt, stats=self._stats)
+        cc_heal_step(ccs, units, dt, stats=self._stats)
+        spawn_step(self.entities, ccs, self.human_teams, stats=self._stats, tick=self._iteration)
 
         self.entities = [e for e in self.entities if e.alive]
+        self._assign_entity_ids()
 
         units = self._get_units()
         ccs = self._get_command_centers()
@@ -295,6 +351,75 @@ class Game:
 
         self.laser_flashes = [lf for lf in self.laser_flashes if lf.update(dt)]
         self._iteration += 1
+
+        # Sample stats time-series every 60 ticks (1 second)
+        if self._iteration % GameStats.SAMPLE_INTERVAL == 0:
+            self._stats.sample_tick(self._iteration, self.entities)
+
+        self._replay_recorder.capture_tick(
+            self._iteration, self.entities, self.laser_flashes,
+        )
+
+        # -- win condition: check if < 2 teams have a living CC ----------------
+        ccs = self._get_command_centers()
+        surviving_teams = {cc.team for cc in ccs}
+        if len(surviving_teams) < 2 and self._winner == 0:
+            if len(surviving_teams) == 1:
+                self._winner = next(iter(surviving_teams))
+            else:
+                self._winner = -1  # draw — both CCs destroyed
+            self.running = False
+
+    # -- serialization --------------------------------------------------------
+
+    def save_state(self) -> dict[str, Any]:
+        return {
+            "entities": [e.to_dict() for e in self.entities],
+            "laser_flashes": [lf.to_dict() for lf in self.laser_flashes],
+            "iteration": self._iteration,
+            "winner": self._winner,
+            "next_entity_id": self._next_entity_id,
+        }
+
+    def load_state(self, data: dict[str, Any]):
+        raw_entities = data["entities"]
+
+        # Pass 1: create all entities from flat dicts
+        pairs: list[tuple[Entity, dict]] = []
+        for ed in raw_entities:
+            cls = _ENTITY_TYPES[ed["type"]]
+            entity = cls.from_dict(ed)
+            pairs.append((entity, ed))
+
+        # Pass 2: build lookup map, resolve cross-references
+        id_map: dict[int, Entity] = {e.entity_id: e for e, _ in pairs}
+
+        for entity, ed in pairs:
+            if isinstance(entity, Unit):
+                fid = ed.get("_follow_entity_id")
+                if fid is not None and fid in id_map:
+                    entity._follow_entity = id_map[fid]
+                aid = ed.get("attack_target_id")
+                if aid is not None and aid in id_map:
+                    entity.attack_target = id_map[aid]
+            elif isinstance(entity, CommandCenter):
+                me_ids = ed.get("metal_extractor_ids", [])
+                entity.metal_extractors = [
+                    id_map[mid] for mid in me_ids if mid in id_map
+                ]
+                entity._bounds = (self.width, self.height)
+            elif isinstance(entity, MetalExtractor):
+                ms_id = ed.get("metal_spot_id")
+                if ms_id is not None and ms_id in id_map:
+                    entity.metal_spot = id_map[ms_id]
+
+        self.entities = [e for e, _ in pairs]
+        self.metal_spots = [e for e in self.entities if isinstance(e, MetalSpot)]
+        self.laser_flashes = [LaserFlash.from_dict(lfd) for lfd in data["laser_flashes"]]
+        self._iteration = data["iteration"]
+        self._winner = data["winner"]
+        self._next_entity_id = data["next_entity_id"]
+        self._apply_selectability()
 
     # -- render -------------------------------------------------------------
 
@@ -330,16 +455,46 @@ class Game:
         if self._has_human:
             gui.draw_cc_gui(self.screen, self.entities, self.width, self.height)
 
+        self._speed_slider.draw(self.screen)
+
         pygame.display.flip()
 
     # -- run ----------------------------------------------------------------
 
-    def run(self):
+    def run(self) -> dict[str, Any]:
+        """Run the game loop. Returns a result dict with winner info."""
         self.running = True
         while self.running:
-            dt = self.clock.tick(self.fps) / 1000.0
+            raw_dt = self.clock.tick(self.fps) / 1000.0
+            real_dt = min(raw_dt, MAX_FRAME_DT)
+
+            if self._speed_multiplier <= 0:
+                sim_dt = FIXED_DT * 100  # unlimited: up to 100 ticks/frame
+            else:
+                sim_dt = real_dt * self._speed_multiplier
+
+            self._accumulator += sim_dt
             self.handle_events()
-            self.step(dt)
+
+            while self._accumulator >= FIXED_DT and self.running:
+                self.step(FIXED_DT)
+                self._accumulator -= FIXED_DT
+
             self.render()
-        pygame.quit()
-        sys.exit()
+
+        stats_data = self._stats.finalize(self._winner, self.entities)
+        replay_path = self._replay_recorder.save(self._winner, self.human_teams, stats=stats_data)
+
+        result = {
+            "winner": self._winner,
+            "human_teams": self.human_teams,
+            "stats": stats_data,
+            "replay_filepath": replay_path,
+        }
+
+        if self._owns_pygame:
+            pygame.quit()
+            import sys
+            sys.exit()
+
+        return result
