@@ -97,6 +97,7 @@ class App:
         height = data.get("height", 600)
         obs = data.get("obstacle_count", (4, 8))
         team_ai_ids: dict[int, str] = data.get("team_ai_ids", {})
+        player_name: str = data.get("player_name", "Unnamed Player")
 
         # Build AI instances from registry
         team_ai = {}
@@ -117,6 +118,7 @@ class App:
         replay_config = {
             "team_ai_ids": team_ai_ids,
             "obstacle_count": list(obs),
+            "player_name": player_name,
         }
 
         game = Game(
@@ -127,6 +129,7 @@ class App:
             screen=game_screen,
             clock=self._clock,
             replay_config=replay_config,
+            player_name=player_name,
         )
 
         try:

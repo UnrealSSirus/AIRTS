@@ -73,6 +73,17 @@ class CommandCenter(PolygonEntity, Damageable):
             u.move(*self.rally_point)
         return u
 
+    def draw_scaled(self, surface: pygame.Surface, scale: float):
+        """Draw the CC hexagon at a given scale factor (0..1). No spawn arc or rally flag."""
+        scaled_pts = [(self.x + px * scale, self.y + py * scale) for px, py in self.points]
+        pygame.draw.polygon(surface, self.color, scaled_pts)
+        outline = TEAM1_SELECTED_COLOR if self.team == 1 else (255, 140, 140)
+        pygame.draw.polygon(surface, outline, scaled_pts, 2)
+
+        # Health bar only if visible
+        if scale > 0.1:
+            self.draw_health_bar(surface, self.x, self.y, (CC_RADIUS * scale) + HEALTH_BAR_OFFSET, bar_w=int(40 * scale))
+
     def draw(self, surface: pygame.Surface):
         translated = [(self.x + px, self.y + py) for px, py in self.points]
         pygame.draw.polygon(surface, self.color, translated)

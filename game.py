@@ -1,6 +1,7 @@
 """Game class — owns the loop, wires systems together."""
 from __future__ import annotations
 import math
+import random
 from typing import Any
 import pygame
 
@@ -23,7 +24,7 @@ from entities.metal_extractor import MetalExtractor
 from config.settings import (
     SELECTION_FILL_COLOR, SELECTION_RECT_COLOR,
     COMMAND_PATH_COLOR, COMMAND_DOT_COLOR, PATH_SAMPLE_MIN_DIST,
-    FIXED_DT, MAX_FRAME_DT,
+    FIXED_DT, MAX_FRAME_DT, CC_RADIUS,
 )
 from entities.shapes import RectEntity, CircleEntity, PolygonEntity
 from systems.replay import ReplayRecorder
@@ -57,6 +58,7 @@ class Game:
         screen: pygame.Surface | None = None,
         clock: pygame.time.Clock | None = None,
         replay_config: dict | None = None,
+        player_name: str = "Human",
     ):
         """
         *team_ai* maps team numbers to AI controllers.  Teams **not** present
@@ -86,6 +88,7 @@ class Game:
         self.clock = clock or pygame.time.Clock()
         self.running = False
         self.fps = 60
+        self._player_name = player_name
         self._fps_font = pygame.font.SysFont(None, 22)
         self._label_font = pygame.font.SysFont(None, 20)
 
@@ -132,6 +135,22 @@ class Game:
 
         self._replay_recorder = ReplayRecorder(width, height, replay_config)
 
+        # -- phase state machine: warp_in → playing → explode ----------------
+        self._phase: str = "warp_in"
+        self._anim_timer: float = 0.0
+        self._fragments: list[dict] = []
+        self._anim_surface = pygame.Surface((width, height), pygame.SRCALPHA)
+
+        # Cache CC visual data at init (CCs don't move)
+        self._cc_data: dict[int, dict] = {}
+        for e in self.entities:
+            if isinstance(e, CommandCenter):
+                self._cc_data[e.team] = {
+                    "x": e.x, "y": e.y,
+                    "color": e.color,
+                    "points": list(e.points),
+                }
+
     # -- init helpers -------------------------------------------------------
 
     def _assign_entity_ids(self):
@@ -160,6 +179,17 @@ class Game:
 
     def _get_obstacles(self) -> list[Entity]:
         return [e for e in self.entities if e.obstacle]
+
+    def _refresh_steer_obstacles(self):
+        """Build flat tuple of (x, y, radius) for unit steering."""
+        steer = []
+        for e in self.entities:
+            if e.obstacle and e.alive:
+                cx, cy = e.center()
+                steer.append((cx, cy, e.collision_radius()))
+            elif isinstance(e, CommandCenter) and e.alive:
+                steer.append((e.x, e.y, CC_RADIUS))
+        Unit._steer_obstacles = tuple(steer)
 
     def _get_metal_extractors(self) -> list[MetalExtractor]:
         return [e for e in self.entities if isinstance(e, MetalExtractor)]
@@ -341,6 +371,8 @@ class Game:
     # -- step ---------------------------------------------------------------
 
     def step(self, dt: float):
+        self._refresh_steer_obstacles()
+
         for entity in self.entities:
             entity.update(dt)
 
@@ -388,7 +420,13 @@ class Game:
                 self._winner = next(iter(surviving_teams))
             else:
                 self._winner = -1  # draw — both CCs destroyed
-            self.running = False
+            # Transition to explode phase instead of ending immediately
+            self._phase = "explode"
+            self._anim_timer = 0.0
+            # Init fragments for all losing teams
+            losing_teams = {1, 2} - surviving_teams
+            for t in losing_teams:
+                self._init_fragments(t)
 
     # -- serialization --------------------------------------------------------
 
@@ -445,17 +483,25 @@ class Game:
 
     def render(self):
         self.screen.fill((0, 0, 0))
-        for entity in self.entities:
-            entity.draw(self.screen)
 
-        for lf in self.laser_flashes:
-            lf.draw(self.screen)
+        if self._phase == "warp_in":
+            self._render_warp_in()
+        elif self._phase == "explode":
+            self._render_explode()
+        else:
+            # Normal playing render
+            for entity in self.entities:
+                entity.draw(self.screen)
+
+        if self._phase != "warp_in":
+            for lf in self.laser_flashes:
+                lf.draw(self.screen)
 
         # AI / Human name labels above command centers
         for entity in self.entities:
             if isinstance(entity, CommandCenter) and entity.alive:
                 ai = self.team_ai.get(entity.team)
-                name = ai.ai_name if ai else "Human"
+                name = ai.ai_name if ai else self._player_name
                 name_surf = self._label_font.render(name, True, (220, 220, 220))
                 nx = int(entity.x) - name_surf.get_width() // 2
                 ny = int(entity.y) - 40
@@ -494,6 +540,103 @@ class Game:
 
         pygame.display.flip()
 
+    # -- animation helpers --------------------------------------------------
+
+    def _render_warp_in(self):
+        """Render warp-in phase: non-CC entities normal, CCs scale in with glow."""
+        t = min(self._anim_timer / 3.0, 1.0)
+        scale = t * (2.0 - t)  # ease-out curve
+
+        # Draw all non-CC entities normally
+        for entity in self.entities:
+            if not isinstance(entity, CommandCenter):
+                entity.draw(self.screen)
+
+        # Draw CCs at scaled size
+        for entity in self.entities:
+            if isinstance(entity, CommandCenter) and entity.alive:
+                entity.draw_scaled(self.screen, scale)
+
+                # Glow ring: expands outward, fading
+                glow_radius = int(CC_RADIUS * 3 * t)
+                glow_alpha = int(120 * (1.0 - t))
+                if glow_radius > 0 and glow_alpha > 0:
+                    self._anim_surface.fill((0, 0, 0, 0))
+                    glow_color = (*entity.color[:3], glow_alpha)
+                    pygame.draw.circle(
+                        self._anim_surface, glow_color,
+                        (int(entity.x), int(entity.y)), glow_radius, 3,
+                    )
+                    self.screen.blit(self._anim_surface, (0, 0))
+
+    def _init_fragments(self, team: int):
+        """Create 6 triangular fragments from the losing CC's hexagon."""
+        data = self._cc_data.get(team)
+        if not data:
+            return
+
+        cx, cy = data["x"], data["y"]
+        color = data["color"]
+        pts = data["points"]  # hex vertex offsets relative to center
+
+        for i in range(len(pts)):
+            p1 = pts[i]
+            p2 = pts[(i + 1) % len(pts)]
+            # Triangle: center, vertex i, vertex i+1
+            tri = [(0.0, 0.0), p1, p2]
+
+            # Outward direction: average of the two outer vertices
+            out_x = (p1[0] + p2[0]) / 2
+            out_y = (p1[1] + p2[1]) / 2
+            dist = math.hypot(out_x, out_y) or 1.0
+            out_x /= dist
+            out_y /= dist
+
+            speed = random.uniform(40, 120)
+            self._fragments.append({
+                "points": tri,
+                "cx": cx, "cy": cy,
+                "vx": out_x * speed + random.uniform(-20, 20),
+                "vy": out_y * speed + random.uniform(-20, 20),
+                "angle": 0.0,
+                "rot_speed": random.uniform(-4, 4),
+                "color": color,
+            })
+
+    def _update_fragments(self, dt: float):
+        """Move and rotate explosion fragments."""
+        for frag in self._fragments:
+            frag["cx"] += frag["vx"] * dt
+            frag["cy"] += frag["vy"] * dt
+            frag["angle"] += frag["rot_speed"] * dt
+
+    def _render_explode(self):
+        """Render explode phase: surviving entities normal, fragments fly out."""
+        # Draw all surviving entities normally
+        for entity in self.entities:
+            entity.draw(self.screen)
+
+        # Draw explosion fragments
+        t = min(self._anim_timer / 3.0, 1.0)
+        alpha = int(255 * (1.0 - t))
+        if alpha <= 0:
+            return
+
+        self._anim_surface.fill((0, 0, 0, 0))
+        for frag in self._fragments:
+            cos_a = math.cos(frag["angle"])
+            sin_a = math.sin(frag["angle"])
+            rotated = []
+            for px, py in frag["points"]:
+                rx = px * cos_a - py * sin_a + frag["cx"]
+                ry = px * sin_a + py * cos_a + frag["cy"]
+                rotated.append((rx, ry))
+
+            frag_color = (*frag["color"][:3], alpha)
+            pygame.draw.polygon(self._anim_surface, frag_color, rotated)
+
+        self.screen.blit(self._anim_surface, (0, 0))
+
     # -- run ----------------------------------------------------------------
 
     def run(self) -> dict[str, Any]:
@@ -503,19 +646,34 @@ class Game:
             raw_dt = self.clock.tick(self.fps) / 1000.0
             real_dt = min(raw_dt, MAX_FRAME_DT)
 
-            if self._speed_multiplier <= 0:
-                sim_dt = FIXED_DT * 100  # unlimited: up to 100 ticks/frame
-            else:
-                sim_dt = real_dt * self._speed_multiplier
-
-            self._accumulator += sim_dt
             self.handle_events()
 
-            while self._accumulator >= FIXED_DT and self.running:
-                self.step(FIXED_DT)
-                self._accumulator -= FIXED_DT
+            if self._phase == "warp_in":
+                self._anim_timer += real_dt
+                if self._anim_timer >= 3.0:
+                    self._phase = "playing"
+                self.render()
 
-            self.render()
+            elif self._phase == "playing":
+                if self._speed_multiplier <= 0:
+                    sim_dt = FIXED_DT * 100  # unlimited: up to 100 ticks/frame
+                else:
+                    sim_dt = real_dt * self._speed_multiplier
+
+                self._accumulator += sim_dt
+
+                while self._accumulator >= FIXED_DT and self.running:
+                    self.step(FIXED_DT)
+                    self._accumulator -= FIXED_DT
+
+                self.render()
+
+            elif self._phase == "explode":
+                self._anim_timer += real_dt
+                self._update_fragments(real_dt)
+                if self._anim_timer >= 3.0:
+                    self.running = False
+                self.render()
 
         stats_data = self._stats.finalize(self._winner, self.entities)
         replay_path = self._replay_recorder.save(self._winner, self.human_teams, stats=stats_data)
