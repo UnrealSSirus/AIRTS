@@ -17,6 +17,7 @@ FREE_FIRE = "free_fire"
 
 
 class Unit(CircleEntity, Damageable):
+    _steer_obstacles: tuple = ()  # set by Game; tuples of (x, y, radius)
 
     def __init__(self, x: float = 0, y: float = 0, team: int = 1,
                  unit_type: str = "soldier"):
@@ -120,13 +121,66 @@ class Unit(CircleEntity, Damageable):
             return
 
         step = self.speed * dt
-        if step >= dist:
+        nx = dx / dist
+        ny = dy / dist
+
+        # Steer around obstacles in our path
+        sx, sy, steered = self._steer(nx, ny, min(dist, 100.0))
+
+        if step >= dist and not steered:
             self.x = self.target[0]
             self.y = self.target[1]
             self.target = None
         else:
-            self.x += dx / dist * step
-            self.y += dy / dist * step
+            self.x += sx * step
+            self.y += sy * step
+
+    def _steer(self, dir_x: float, dir_y: float, lookahead: float):
+        """Adjust movement direction to steer around obstacles ahead.
+
+        Returns (steer_x, steer_y, was_steered).
+        """
+        avoid_x = 0.0
+        avoid_y = 0.0
+
+        for ox, oy, orad in self._steer_obstacles:
+            # Vector from unit to obstacle center
+            to_x = ox - self.x
+            to_y = oy - self.y
+
+            # How far ahead along our movement direction?
+            ahead = to_x * dir_x + to_y * dir_y
+            if ahead <= 0 or ahead > lookahead + orad:
+                continue
+
+            # Signed perpendicular distance (positive = obstacle to right)
+            cross = to_x * dir_y - to_y * dir_x
+            clearance = orad + self.radius + 4
+            if abs(cross) >= clearance:
+                continue
+
+            # Stronger steering when obstacle is more directly in our path
+            strength = (clearance - abs(cross)) / clearance
+
+            # Steer away from obstacle center (toward the nearer edge)
+            if cross >= 0:
+                # Obstacle to our right — steer left
+                avoid_x -= dir_y * strength
+                avoid_y += dir_x * strength
+            else:
+                # Obstacle to our left — steer right
+                avoid_x += dir_y * strength
+                avoid_y -= dir_x * strength
+
+        if avoid_x == 0.0 and avoid_y == 0.0:
+            return dir_x, dir_y, False
+
+        rx = dir_x + avoid_x
+        ry = dir_y + avoid_y
+        rl = math.hypot(rx, ry)
+        if rl > 0:
+            return rx / rl, ry / rl, True
+        return dir_x, dir_y, False
 
     # -- drawing ------------------------------------------------------------
 

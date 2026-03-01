@@ -7,6 +7,7 @@ from ui.theme import (
     BTN_HEIGHT, BTN_FONT_SIZE, BTN_BORDER_RADIUS,
     BACK_BTN_SIZE, BACK_BTN_MARGIN, BACK_BTN_COLOR,
     DD_BG, DD_HOVER, DD_BORDER, DD_TEXT, DD_HEIGHT, DD_FONT_SIZE,
+    TI_BG, TI_ACTIVE_BG, TI_BORDER, TI_ACTIVE_BORDER, TI_TEXT, TI_PLACEHOLDER,
     SL_TRACK_COLOR, SL_FILL_COLOR, SL_HANDLE_COLOR, SL_TEXT_COLOR,
     SL_WIDTH, SL_HEIGHT, SL_HANDLE_RADIUS, SL_FONT_SIZE,
     TG_ACTIVE, TG_INACTIVE, TG_BORDER, TG_TEXT, TG_FONT_SIZE,
@@ -230,6 +231,77 @@ class Dropdown:
                 pygame.draw.rect(surface, DD_BORDER, r, 1)
                 t = font.render(display, True, DD_TEXT)
                 surface.blit(t, (r.x + 8, r.centery - t.get_height() // 2))
+
+
+# ---------------------------------------------------------------------------
+# TextInput
+# ---------------------------------------------------------------------------
+
+class TextInput:
+    """Single-line editable text field with placeholder support."""
+
+    def __init__(self, x: int, y: int, w: int,
+                 text: str = "", placeholder: str = "",
+                 max_len: int = 24):
+        self.rect = pygame.Rect(x, y, w, DD_HEIGHT)
+        self.text = text
+        self.placeholder = placeholder
+        self.max_len = max_len
+        self.active = False
+        self.visible = True
+
+    def handle_event(self, event: pygame.event.Event) -> bool:
+        """Return True if the event was consumed by the input."""
+        if not self.visible:
+            return False
+        if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+            if self.rect.collidepoint(event.pos):
+                self.active = True
+                return True
+            else:
+                self.active = False
+                return False
+        if self.active and event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_BACKSPACE:
+                self.text = self.text[:-1]
+            elif event.key in (pygame.K_RETURN, pygame.K_ESCAPE):
+                self.active = False
+            elif event.unicode and event.unicode.isprintable() and len(self.text) < self.max_len:
+                self.text += event.unicode
+            return True
+        return False
+
+    def draw(self, surface: pygame.Surface):
+        if not self.visible:
+            return
+        font = _get_font(DD_FONT_SIZE)
+
+        bg = TI_ACTIVE_BG if self.active else TI_BG
+        border = TI_ACTIVE_BORDER if self.active else TI_BORDER
+        pygame.draw.rect(surface, bg, self.rect, border_radius=4)
+        pygame.draw.rect(surface, border, self.rect, 1, border_radius=4)
+
+        if self.text:
+            text_surf = font.render(self.text, True, TI_TEXT)
+        else:
+            text_surf = font.render(self.placeholder, True, TI_PLACEHOLDER)
+
+        # Clip text to input bounds
+        clip_rect = pygame.Rect(self.rect.x + 4, self.rect.y,
+                                self.rect.w - 8, self.rect.h)
+        old_clip = surface.get_clip()
+        surface.set_clip(clip_rect)
+        surface.blit(text_surf, (self.rect.x + 8,
+                                 self.rect.centery - text_surf.get_height() // 2))
+        surface.set_clip(old_clip)
+
+        # Blinking cursor when active
+        if self.active and (pygame.time.get_ticks() // 500) % 2 == 0:
+            text_w = font.size(self.text)[0] if self.text else 0
+            cx = self.rect.x + 8 + text_w
+            cy1 = self.rect.centery - 8
+            cy2 = self.rect.centery + 8
+            pygame.draw.line(surface, TI_TEXT, (cx, cy1), (cx, cy2), 1)
 
 
 # ---------------------------------------------------------------------------
