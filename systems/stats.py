@@ -39,6 +39,17 @@ class GameStats:
         self.teams: dict[int, TeamStats] = {1: TeamStats(), 2: TeamStats()}
         self.timestamps: list[int] = []
         self._finalized = False
+        self._step_times_buf: list[float] = []
+        self.ts_step_ms: list[float] = []
+
+        # Per-subsystem timing breakdown (ms)
+        self._subsystem_names = [
+            "grid_build", "facing_precompute", "entity_update", "ai_step",
+            "capture", "combat", "cc_heal", "spawn",
+            "physics", "filtering",
+        ]
+        self._subsystem_bufs: dict[str, list[float]] = {n: [] for n in self._subsystem_names}
+        self.ts_subsystems: dict[str, list[float]] = {n: [] for n in self._subsystem_names}
 
     # -- recording helpers (called by systems) --------------------------------
 
@@ -63,6 +74,14 @@ class GameStats:
     def record_action(self, team: int):
         self.teams[team].actions += 1
 
+    def record_step_time(self, ms: float):
+        self._step_times_buf.append(ms)
+
+    def record_subsystem(self, name: str, ms: float):
+        buf = self._subsystem_bufs.get(name)
+        if buf is not None:
+            buf.append(ms)
+
     # -- time-series sampling -------------------------------------------------
 
     def sample_tick(self, tick: int, entities: list):
@@ -76,6 +95,23 @@ class GameStats:
         self.timestamps.append(tick)
         elapsed_minutes = max(tick / 3600.0, 1 / 3600.0)  # 60 ticks/sec
 
+        # Average step time for this sample interval
+        if self._step_times_buf:
+            avg = sum(self._step_times_buf) / len(self._step_times_buf)
+            self.ts_step_ms.append(round(avg, 3))
+            self._step_times_buf.clear()
+        else:
+            self.ts_step_ms.append(0.0)
+
+        # Per-subsystem averages
+        for name in self._subsystem_names:
+            buf = self._subsystem_bufs[name]
+            if buf:
+                self.ts_subsystems[name].append(round(sum(buf) / len(buf), 3))
+                buf.clear()
+            else:
+                self.ts_subsystems[name].append(0.0)
+
         for team_id, ts in self.teams.items():
             # CC health
             cc_hp = 0.0
@@ -85,10 +121,11 @@ class GameStats:
                     break
             ts.ts_cc_health.append(cc_hp)
 
-            # Army count
+            # Army count (exclude buildings)
             army = sum(
                 1 for e in entities
                 if isinstance(e, Unit) and e.alive and e.team == team_id
+                and not getattr(e, 'is_building', False)
             )
             ts.ts_army_count.append(army)
 
@@ -117,6 +154,7 @@ class GameStats:
         units_alive = sum(
             1 for e in entities
             if isinstance(e, Unit) and e.alive and e.team == team
+            and not getattr(e, 'is_building', False)
         )
         survival = units_alive * 25
         healing = ts.healing_done / 10
@@ -181,4 +219,6 @@ class GameStats:
             "teams": teams_data,
             "final": final_data,
             "game_duration_seconds": duration_seconds,
+            "step_ms": self.ts_step_ms,
+            "subsystem_ms": {k: list(v) for k, v in self.ts_subsystems.items()},
         }

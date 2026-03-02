@@ -98,6 +98,7 @@ class App:
         obs = data.get("obstacle_count", (4, 8))
         team_ai_ids: dict[int, str] = data.get("team_ai_ids", {})
         player_name: str = data.get("player_name", "Unnamed Player")
+        headless: bool = data.get("headless", False)
 
         # Build AI instances from registry
         team_ai = {}
@@ -117,6 +118,7 @@ class App:
 
         replay_config = {
             "team_ai_ids": team_ai_ids,
+            "team_ai_names": {t: ai.ai_name for t, ai in team_ai.items()},
             "obstacle_count": list(obs),
             "player_name": player_name,
         }
@@ -130,6 +132,7 @@ class App:
             clock=self._clock,
             replay_config=replay_config,
             player_name=player_name,
+            headless=headless,
         )
 
         try:

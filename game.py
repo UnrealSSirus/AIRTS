@@ -2,6 +2,7 @@
 from __future__ import annotations
 import math
 import random
+import time
 from typing import Any
 import pygame
 
@@ -9,10 +10,10 @@ from entities.base import Entity
 from entities.unit import Unit
 from entities.command_center import CommandCenter
 from entities.laser import LaserFlash
-from systems.combat import combat_step, medic_heal_step, cc_heal_step
+from systems.combat import combat_step, cc_heal_step
 from systems.physics import (
     resolve_unit_collisions, resolve_obstacle_collisions,
-    resolve_structure_collisions, clamp_units_to_bounds,
+    clamp_units_to_bounds,
 )
 from systems.spawning import spawn_step
 from systems.selection import click_select, apply_circle_selection, select_all_of_type
@@ -27,8 +28,13 @@ from config.settings import (
     FIXED_DT, MAX_FRAME_DT, CC_RADIUS,
 )
 from entities.shapes import RectEntity, CircleEntity, PolygonEntity
+from systems.commands import GameCommand, CommandQueue
 from systems.replay import ReplayRecorder
 from systems.stats import GameStats
+from core.spatial_grid import SpatialGrid
+from core.helpers import circle_overlaps_aabb
+from core.vectorized import build_obstacle_arrays, batch_obstacle_push
+import numpy as np
 from ui.widgets import Slider
 import gui
 
@@ -59,6 +65,7 @@ class Game:
         clock: pygame.time.Clock | None = None,
         replay_config: dict | None = None,
         player_name: str = "Human",
+        headless: bool = False,
     ):
         """
         *team_ai* maps team numbers to AI controllers.  Teams **not** present
@@ -88,6 +95,7 @@ class Game:
         self.clock = clock or pygame.time.Clock()
         self.running = False
         self.fps = 60
+        self._headless = headless
         self._player_name = player_name
         self._fps_font = pygame.font.SysFont(None, 22)
         self._label_font = pygame.font.SysFont(None, 20)
@@ -104,6 +112,7 @@ class Game:
         self._next_entity_id: int = 1
         self._speed_multiplier: float = 1.0
         self._accumulator: float = 0.0
+        self._grid = SpatialGrid(cell_size=50.0)
         self._assign_entity_ids()
 
         self.team_ai: dict[int, BaseAI] = team_ai if team_ai is not None else {2: WanderAI()}
@@ -114,6 +123,8 @@ class Game:
         self._iteration = 0
         self._winner = 0  # 0 = undecided, 1 or 2 = that team won
         self._stats = GameStats()
+
+        self._command_queue = CommandQueue()
 
         self._apply_selectability()
         self._bind_and_start_ais()
@@ -140,6 +151,11 @@ class Game:
         self._anim_timer: float = 0.0
         self._fragments: list[dict] = []
         self._anim_surface = pygame.Surface((width, height), pygame.SRCALPHA)
+        self._fog_surface = pygame.Surface((width, height), pygame.SRCALPHA)
+        self._fog_border = pygame.Surface((width, height))
+        self._fog_border.set_colorkey((0, 0, 0))
+
+        self._physics_cooldown: int = 60  # ticks remaining; handles initial spawn settling
 
         # Cache CC visual data at init (CCs don't move)
         self._cc_data: dict[int, dict] = {}
@@ -166,7 +182,8 @@ class Game:
 
     def _bind_and_start_ais(self):
         for team_id, ai in self.team_ai.items():
-            ai._bind(team_id, self, stats=self._stats)
+            ai._bind(team_id, self, stats=self._stats,
+                     command_queue=self._command_queue)
             ai.on_start()
 
     # -- queries ------------------------------------------------------------
@@ -187,8 +204,8 @@ class Game:
             if e.obstacle and e.alive:
                 cx, cy = e.center()
                 steer.append((cx, cy, e.collision_radius()))
-            elif isinstance(e, CommandCenter) and e.alive:
-                steer.append((e.x, e.y, CC_RADIUS))
+            elif isinstance(e, Unit) and e.is_building and e.alive:
+                steer.append((e.x, e.y, e.radius))
         Unit._steer_obstacles = tuple(steer)
 
     def _get_metal_extractors(self) -> list[MetalExtractor]:
@@ -257,23 +274,42 @@ class Game:
         rally = self._rpath[-1]
         for entity in self.entities:
             if isinstance(entity, CommandCenter) and entity.selected:
-                entity.rally_point = rally
-                if entity.team in self.human_teams:
-                    self._stats.record_action(entity.team)
+                team = entity.team
+                if team in self.human_teams:
+                    self._command_queue.enqueue(GameCommand(
+                        type="set_rally",
+                        team=team,
+                        tick=self._iteration,
+                        data={"team": team, "position": list(rally)},
+                    ))
+                    self._stats.record_action(team)
 
     def _assign_path_goals(self):
         selected = [e for e in self.entities if isinstance(e, Unit) and e.selected]
         if not selected or len(self._rpath) < 2:
             if selected and len(self._rpath) == 1:
                 px, py = self._rpath[0]
+                unit_ids = []
+                targets = []
                 for u in selected:
-                    u.move(px, py)
+                    unit_ids.append(u.entity_id)
+                    targets.append((px, py))
                     if u.team in self.human_teams:
                         self._stats.record_action(u.team)
+                if unit_ids:
+                    team = selected[0].team
+                    self._command_queue.enqueue(GameCommand(
+                        type="move",
+                        team=team,
+                        tick=self._iteration,
+                        data={"unit_ids": unit_ids, "targets": targets},
+                    ))
             return
 
         goals = self._resample_path(len(selected))
         assigned: set[int] = set()
+        unit_ids: list[int] = []
+        targets: list[tuple[float, float]] = []
 
         for gx, gy in goals:
             best_idx = -1
@@ -286,10 +322,20 @@ class Game:
                     best_dist = d
                     best_idx = i
             if best_idx >= 0:
-                selected[best_idx].move(gx, gy)
+                unit_ids.append(selected[best_idx].entity_id)
+                targets.append((gx, gy))
                 assigned.add(best_idx)
                 if selected[best_idx].team in self.human_teams:
                     self._stats.record_action(selected[best_idx].team)
+
+        if unit_ids:
+            team = selected[0].team
+            self._command_queue.enqueue(GameCommand(
+                type="move",
+                team=team,
+                tick=self._iteration,
+                data={"unit_ids": unit_ids, "targets": targets},
+            ))
 
     # -- events -------------------------------------------------------------
 
@@ -309,8 +355,19 @@ class Game:
                 continue
 
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                if gui.handle_gui_click(self.entities, event.pos[0], event.pos[1],
-                                        self.width, self.height):
+                gui_result = gui.handle_gui_click(
+                    self.entities, event.pos[0], event.pos[1],
+                    self.width, self.height,
+                )
+                if gui_result is not None:
+                    cc = gui.get_selected_cc(self.entities)
+                    if cc is not None:
+                        self._command_queue.enqueue(GameCommand(
+                            type="set_spawn_type",
+                            team=cc.team,
+                            tick=self._iteration,
+                            data={"team": cc.team, "unit_type": gui_result},
+                        ))
                     continue
                 self._dragging = True
                 self._drag_start = event.pos
@@ -368,38 +425,218 @@ class Game:
                 self._set_rally_points()
                 self._rpath = []
 
+    # -- command application ------------------------------------------------
+
+    def _apply_command(self, cmd: GameCommand) -> None:
+        """Resolve entity IDs in *cmd* and execute the mutation."""
+        id_map: dict[int, Entity] = {e.entity_id: e for e in self.entities}
+        data = cmd.data
+
+        if cmd.type == "move":
+            for uid, (tx, ty) in zip(data["unit_ids"], data["targets"]):
+                unit = id_map.get(uid)
+                if isinstance(unit, Unit) and unit.alive:
+                    unit.move(tx, ty)
+
+        elif cmd.type == "attack":
+            unit = id_map.get(data["unit_id"])
+            target = id_map.get(data["target_id"])
+            if isinstance(unit, Unit) and unit.alive and target is not None and target.alive:
+                unit.attack_target = target
+
+        elif cmd.type == "stop":
+            for uid in data["unit_ids"]:
+                unit = id_map.get(uid)
+                if isinstance(unit, Unit) and unit.alive:
+                    unit.stop()
+
+        elif cmd.type == "set_rally":
+            pos = tuple(data["position"])
+            for e in self.entities:
+                if isinstance(e, CommandCenter) and e.team == data["team"]:
+                    e.rally_point = pos
+
+        elif cmd.type == "set_spawn_type":
+            for e in self.entities:
+                if isinstance(e, CommandCenter) and e.team == data["team"]:
+                    e.spawn_type = data["unit_type"]
+
     # -- step ---------------------------------------------------------------
 
     def step(self, dt: float):
+        _t0 = time.perf_counter()
+        _perf = time.perf_counter
+
+        # Drain and apply all pending commands before simulation
+        for cmd in self._command_queue.drain(self._iteration):
+            self._apply_command(cmd)
+
         self._refresh_steer_obstacles()
 
+        # Build spatial grid once per step — shared by all systems.
+        # Single-pass: also build alive_mobile_units, team AABBs, and
+        # team_any_hurt (for healer early-exit).
+        _t = _perf()
+        grid = self._grid
+        grid.clear()
+        alive_mobile_units: list[Unit] = []
+        team_aabb: dict[int, tuple[float, float, float, float]] = {}
+        team_any_hurt: dict[int, bool] = {}
+        for e in self.entities:
+            if isinstance(e, Unit) and e.alive:
+                grid.insert(e)
+                if not e.is_building:
+                    alive_mobile_units.append(e)
+                    bb = team_aabb.get(e.team)
+                    if bb is None:
+                        team_aabb[e.team] = (e.x, e.y, e.x, e.y)
+                    else:
+                        team_aabb[e.team] = (
+                            min(bb[0], e.x), min(bb[1], e.y),
+                            max(bb[2], e.x), max(bb[3], e.y),
+                        )
+                    if e.hp < e.max_hp:
+                        team_any_hurt[e.team] = True
+        Unit._spatial_grid = grid
+        self._stats.record_subsystem("grid_build", (_perf() - _t) * 1000)
+
+        # Precompute facing targets using grid (O(N*k), not O(N²))
+        # With team AABB early-exits to skip cross-team queries when far apart
+        _t = _perf()
+        _query = grid.query_radius
+        for e in alive_mobile_units:
+            # Skip units whose facing is determined by their attack_target
+            if e.attack_target is not None and e.attack_target.alive:
+                e._facing_target = None
+                continue
+
+            healer = e.weapon is not None and e.weapon.hits_only_friendly
+            if healer:
+                # Skip if no allies are hurt
+                if not team_any_hurt.get(e.team, False):
+                    e._facing_target = None
+                    continue
+                # Healer targets are same-team — always nearby, run grid query
+            else:
+                # Attacker: check if ANY enemy could be within LOS
+                enemy_team = 2 if e.team == 1 else 1
+                enemy_bb = team_aabb.get(enemy_team)
+                if enemy_bb is None or not circle_overlaps_aabb(e.x, e.y, e.line_of_sight, enemy_bb):
+                    e._facing_target = None
+                    continue
+
+            ux, uy, uteam = e.x, e.y, e.team
+            los = e.line_of_sight
+            los_sq = los * los
+            best_dsq = 1e30
+            target_pos = None
+            for c in _query(ux, uy, los):
+                if c is e or not c.alive:
+                    continue
+                if healer:
+                    if c.team != uteam or c.hp >= c.max_hp:
+                        continue
+                else:
+                    if c.team == uteam:
+                        continue
+                dx = c.x - ux
+                dy = c.y - uy
+                d_sq = dx * dx + dy * dy
+                if d_sq <= los_sq and d_sq < best_dsq:
+                    best_dsq = d_sq
+                    target_pos = (c.x, c.y)
+            e._facing_target = target_pos
+        self._stats.record_subsystem("facing_precompute", (_perf() - _t) * 1000)
+
+        _t = _perf()
         for entity in self.entities:
             entity.update(dt)
+        self._stats.record_subsystem("entity_update", (_perf() - _t) * 1000)
 
+        _t = _perf()
         units = self._get_units()
         ccs = self._get_command_centers()
         obstacles = self._get_obstacles()
         metal_extractors = self._get_metal_extractors()
+        self._stats.record_subsystem("filtering", (_perf() - _t) * 1000)
 
+        _t = _perf()
         for ai in self.team_ai.values():
             ai.on_step(self._iteration)
+        self._stats.record_subsystem("ai_step", (_perf() - _t) * 1000)
 
-        capture_step(self.entities, ccs, units, self.metal_spots, metal_extractors, dt, stats=self._stats)
-        combat_step(units, ccs, metal_extractors, obstacles, self.laser_flashes, dt, stats=self._stats)
-        medic_heal_step(units, dt, stats=self._stats)
-        cc_heal_step(ccs, units, dt, stats=self._stats)
+        _t = _perf()
+        capture_step(self.entities, ccs, units, self.metal_spots, metal_extractors, dt, stats=self._stats, grid=grid)
+        self._stats.record_subsystem("capture", (_perf() - _t) * 1000)
+
+        # Pre-extract obstacle geometry (shared by combat + physics)
+        _obs_circle = tuple(
+            (obs.x, obs.y, obs.radius)
+            for obs in obstacles if isinstance(obs, CircleEntity)
+        )
+        _obs_rect = tuple(
+            (obs.x, obs.y, obs.width, obs.height)
+            for obs in obstacles if isinstance(obs, RectEntity)
+        )
+        circle_obs_np, rect_obs_np = build_obstacle_arrays(_obs_circle, _obs_rect)
+
+        _t = _perf()
+        combat_step(units, obstacles, self.laser_flashes, dt, stats=self._stats, grid=grid,
+                    circle_obs=_obs_circle, rect_obs=_obs_rect, team_aabb=team_aabb)
+        cc_heal_step(ccs, units, dt, stats=self._stats, grid=grid)
+        self._stats.record_subsystem("combat", (_perf() - _t) * 1000)
+
+        # Spawn — track entity count to detect new spawns for physics cooldown
+        entity_count_before_spawn = len(self.entities)
+        _t = _perf()
         spawn_step(self.entities, ccs, self.human_teams, stats=self._stats, tick=self._iteration)
+        self._stats.record_subsystem("spawn", (_perf() - _t) * 1000)
+
+        if len(self.entities) > entity_count_before_spawn:
+            self._physics_cooldown = 60  # 1 second to settle after spawn
 
         self.entities = [e for e in self.entities if e.alive]
         self._assign_entity_ids()
 
+        # Physics cooldown: detect movement to keep physics running
+        _t = _perf()
         units = self._get_units()
-        ccs = self._get_command_centers()
-        obstacles = self._get_obstacles()
-        resolve_unit_collisions(units, dt)
-        resolve_obstacle_collisions(units, obstacles, dt)
-        resolve_structure_collisions(units, ccs, dt)
-        clamp_units_to_bounds(units, self.width, self.height)
+        mobile_units = [u for u in units if not u.is_building]
+
+        any_moving = False
+        for u in mobile_units:
+            if u.target is not None:
+                any_moving = True
+                break
+        if any_moving:
+            self._physics_cooldown = 10  # keep running 10 ticks after movement stops
+
+        if self._physics_cooldown > 0:
+            self._physics_cooldown -= 1
+
+            # Rebuild grid after culling dead units for physics
+            grid.clear()
+            for u in units:
+                grid.insert(u)
+            resolve_unit_collisions(units, dt, grid=grid)
+
+            # Batch obstacle push
+            if mobile_units:
+                mob_positions = np.column_stack([
+                    np.array([u.x for u in mobile_units], dtype=np.float64),
+                    np.array([u.y for u in mobile_units], dtype=np.float64),
+                ])
+                mob_radii = np.array([u.radius for u in mobile_units], dtype=np.float64)
+                new_pos = batch_obstacle_push(mob_positions, mob_radii, circle_obs_np, rect_obs_np)
+                for i, u in enumerate(mobile_units):
+                    u.x = float(new_pos[i, 0])
+                    u.y = float(new_pos[i, 1])
+
+            clamp_units_to_bounds(units, self.width, self.height)
+        else:
+            # Skip physics — just clamp bounds
+            clamp_units_to_bounds(units, self.width, self.height)
+        self._stats.record_subsystem("physics", (_perf() - _t) * 1000)
 
         self.laser_flashes = [lf for lf in self.laser_flashes if lf.update(dt)]
         self._iteration += 1
@@ -407,6 +644,18 @@ class Game:
         # Sample stats time-series every 60 ticks (1 second)
         if self._iteration % GameStats.SAMPLE_INTERVAL == 0:
             self._stats.sample_tick(self._iteration, self.entities)
+
+            # Print subsystem breakdown every 5 seconds in headless mode
+            if self._headless and self._iteration % (GameStats.SAMPLE_INTERVAL * 5) == 0:
+                units = self._get_units()
+                n_units = sum(1 for u in units if not u.is_building)
+                parts = []
+                for name in self._stats._subsystem_names:
+                    ts = self._stats.ts_subsystems[name]
+                    if ts:
+                        parts.append(f"{name}={ts[-1]:.3f}")
+                step_ms = self._stats.ts_step_ms[-1] if self._stats.ts_step_ms else 0
+                print(f"[tick {self._iteration:>6}] units={n_units:>3}  step={step_ms:.3f}ms  {' | '.join(parts)}")
 
         self._replay_recorder.capture_tick(
             self._iteration, self.entities, self.laser_flashes,
@@ -427,6 +676,9 @@ class Game:
             losing_teams = {1, 2} - surviving_teams
             for t in losing_teams:
                 self._init_fragments(t)
+
+        _elapsed_ms = (time.perf_counter() - _t0) * 1000.0
+        self._stats.record_step_time(_elapsed_ms)
 
     # -- serialization --------------------------------------------------------
 
@@ -454,26 +706,36 @@ class Game:
 
         for entity, ed in pairs:
             if isinstance(entity, Unit):
+                # Unit cross-references (applies to all Units including CC/ME)
                 fid = ed.get("_follow_entity_id")
                 if fid is not None and fid in id_map:
                     entity._follow_entity = id_map[fid]
                 aid = ed.get("attack_target_id")
                 if aid is not None and aid in id_map:
                     entity.attack_target = id_map[aid]
-            elif isinstance(entity, CommandCenter):
-                me_ids = ed.get("metal_extractor_ids", [])
-                entity.metal_extractors = [
-                    id_map[mid] for mid in me_ids if mid in id_map
-                ]
-                entity._bounds = (self.width, self.height)
-            elif isinstance(entity, MetalExtractor):
-                ms_id = ed.get("metal_spot_id")
-                if ms_id is not None and ms_id in id_map:
-                    entity.metal_spot = id_map[ms_id]
+                # CC-specific cross-references
+                if isinstance(entity, CommandCenter):
+                    me_ids = ed.get("metal_extractor_ids", [])
+                    entity.metal_extractors = [
+                        id_map[mid] for mid in me_ids if mid in id_map
+                    ]
+                    entity._bounds = (self.width, self.height)
+                # ME-specific cross-references
+                elif isinstance(entity, MetalExtractor):
+                    ms_id = ed.get("metal_spot_id")
+                    if ms_id is not None and ms_id in id_map:
+                        entity.metal_spot = id_map[ms_id]
 
         self.entities = [e for e, _ in pairs]
         self.metal_spots = [e for e in self.entities if isinstance(e, MetalSpot)]
         self.laser_flashes = [LaserFlash.from_dict(lfd) for lfd in data["laser_flashes"]]
+        for lf, lfd in zip(self.laser_flashes, data["laser_flashes"]):
+            sid = lfd.get("source_id")
+            if sid is not None and sid in id_map:
+                lf.source = id_map[sid]
+            tid = lfd.get("target_id")
+            if tid is not None and tid in id_map:
+                lf.target = id_map[tid]
         self._iteration = data["iteration"]
         self._winner = data["winner"]
         self._next_entity_id = data["next_entity_id"]
@@ -492,6 +754,7 @@ class Game:
             # Normal playing render
             for entity in self.entities:
                 entity.draw(self.screen)
+            self._draw_fog()
 
         if self._phase != "warp_in":
             for lf in self.laser_flashes:
@@ -540,6 +803,49 @@ class Game:
 
         pygame.display.flip()
 
+    # -- drawing helpers ----------------------------------------------------
+
+    def _draw_fog(self):
+        """Draw fog of war overlay — only when a human is playing."""
+        if not self._has_human:
+            return
+        view_team = next(iter(self.human_teams))
+
+        FOG_ALPHA = 200
+        self._fog_surface.fill((0, 0, 0, FOG_ALPHA))
+
+        # Collect friendly LOS sources (units + command centers)
+        los_circles: list[tuple[int, int, int]] = []
+        for entity in self.entities:
+            if not entity.alive:
+                continue
+            if not hasattr(entity, "line_of_sight") or not hasattr(entity, "team"):
+                continue
+            if entity.team != view_team:
+                continue
+            r = int(entity.line_of_sight)
+            if r <= 0:
+                continue
+            los_circles.append((int(entity.x), int(entity.y), r))
+
+        # Punch transparent holes
+        for ex, ey, r in los_circles:
+            size = r * 2
+            cutout = pygame.Surface((size, size), pygame.SRCALPHA)
+            pygame.draw.circle(cutout, (0, 0, 0, FOG_ALPHA), (r, r), r)
+            self._fog_surface.blit(cutout, (ex - r, ey - r),
+                                   special_flags=pygame.BLEND_RGBA_SUB)
+
+        self.screen.blit(self._fog_surface, (0, 0))
+
+        # Border at the fog edge — outline of the union (no venn diagram)
+        self._fog_border.fill((0, 0, 0))
+        for ex, ey, r in los_circles:
+            pygame.draw.circle(self._fog_border, (160, 160, 160), (ex, ey), r)
+        for ex, ey, r in los_circles:
+            pygame.draw.circle(self._fog_border, (0, 0, 0), (ex, ey), max(r - 1, 0))
+        self.screen.blit(self._fog_border, (0, 0))
+
     # -- animation helpers --------------------------------------------------
 
     def _render_warp_in(self):
@@ -568,6 +874,8 @@ class Game:
                         (int(entity.x), int(entity.y)), glow_radius, 3,
                     )
                     self.screen.blit(self._anim_surface, (0, 0))
+
+        self._draw_fog()
 
     def _init_fragments(self, team: int):
         """Create 6 triangular fragments from the losing CC's hexagon."""
@@ -615,6 +923,7 @@ class Game:
         # Draw all surviving entities normally
         for entity in self.entities:
             entity.draw(self.screen)
+        self._draw_fog()
 
         # Draw explosion fragments
         t = min(self._anim_timer / 3.0, 1.0)
@@ -642,38 +951,62 @@ class Game:
     def run(self) -> dict[str, Any]:
         """Run the game loop. Returns a result dict with winner info."""
         self.running = True
-        while self.running:
-            raw_dt = self.clock.tick(self.fps) / 1000.0
-            real_dt = min(raw_dt, MAX_FRAME_DT)
 
-            self.handle_events()
-
-            if self._phase == "warp_in":
-                self._anim_timer += real_dt
-                if self._anim_timer >= 3.0:
-                    self._phase = "playing"
-                self.render()
-
-            elif self._phase == "playing":
-                if self._speed_multiplier <= 0:
-                    sim_dt = FIXED_DT * 100  # unlimited: up to 100 ticks/frame
-                else:
-                    sim_dt = real_dt * self._speed_multiplier
-
-                self._accumulator += sim_dt
-
-                while self._accumulator >= FIXED_DT and self.running:
+        if self._headless:
+            self._phase = "playing"  # skip warp_in
+            headless_font = pygame.font.SysFont(None, 28)
+            while self.running:
+                self.clock.tick(0)  # uncapped
+                self.handle_events()  # pump events for QUIT/ESCAPE
+                for _ in range(200):  # batch 200 ticks per frame
+                    if self._phase != "playing":
+                        break
                     self.step(FIXED_DT)
-                    self._accumulator -= FIXED_DT
+                if self._phase == "explode":
+                    self.running = False  # skip explosion anim
+                # Minimal display: black screen with in-game timer
+                self.screen.fill((0, 0, 0))
+                game_secs = self._iteration / 60.0
+                m, s = divmod(int(game_secs), 60)
+                timer_str = f"Headless  —  {m}:{s:02d}  (tick {self._iteration})"
+                timer_surf = headless_font.render(timer_str, True, (160, 160, 180))
+                tx = self.width // 2 - timer_surf.get_width() // 2
+                ty = self.height // 2 - timer_surf.get_height() // 2
+                self.screen.blit(timer_surf, (tx, ty))
+                pygame.display.flip()
+        else:
+            while self.running:
+                raw_dt = self.clock.tick(self.fps) / 1000.0
+                real_dt = min(raw_dt, MAX_FRAME_DT)
 
-                self.render()
+                self.handle_events()
 
-            elif self._phase == "explode":
-                self._anim_timer += real_dt
-                self._update_fragments(real_dt)
-                if self._anim_timer >= 3.0:
-                    self.running = False
-                self.render()
+                if self._phase == "warp_in":
+                    self._anim_timer += real_dt
+                    if self._anim_timer >= 3.0:
+                        self._phase = "playing"
+                    self.render()
+
+                elif self._phase == "playing":
+                    if self._speed_multiplier <= 0:
+                        sim_dt = FIXED_DT * 100  # unlimited: up to 100 ticks/frame
+                    else:
+                        sim_dt = real_dt * self._speed_multiplier
+
+                    self._accumulator += sim_dt
+
+                    while self._accumulator >= FIXED_DT and self.running:
+                        self.step(FIXED_DT)
+                        self._accumulator -= FIXED_DT
+
+                    self.render()
+
+                elif self._phase == "explode":
+                    self._anim_timer += real_dt
+                    self._update_fragments(real_dt)
+                    if self._anim_timer >= 3.0:
+                        self.running = False
+                    self.render()
 
         stats_data = self._stats.finalize(self._winner, self.entities)
         replay_path = self._replay_recorder.save(self._winner, self.human_teams, stats=stats_data)

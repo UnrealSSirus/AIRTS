@@ -1,9 +1,9 @@
 """Data-driven unit type definitions.
 
 To add a new unit type, add an entry to UNIT_TYPES.  Every entry must include
-the base keys (hp, speed, radius, damage, range, cooldown, symbol, can_attack).
-Optional keys are consumed by specific systems (e.g. heal_rate by the medic
-heal system).
+the base keys (hp, speed, radius, symbol, can_attack).  Combat stats live under
+the ``weapon`` sub-dict and are used to construct a ``Weapon`` dataclass at
+unit creation time.
 
 Symbols are tuples of (x, y) offsets assuming a 16-px reference radius.
 They are scaled at draw-time to the unit's actual radius.
@@ -39,34 +39,59 @@ SCOUT_SYMBOL = (
 UNIT_TYPES = {
     "soldier": {
         "hp": 100, "speed": 40, "radius": 5,
-        "damage": 10, "range": 50, "cooldown": 2.0,
         "symbol": None, "can_attack": True,
+        "fov": 90, "turn_rate": 180, "los": 100,
+        "weapon": {"name": "Laser", "damage": 10, "range": 50, "cooldown": 2.0},
     },
     "medic": {
-        "hp": 100, "speed": 40, "radius": 5,
-        "damage": 0, "range": 0, "cooldown": 0,
-        "symbol": MEDIC_SYMBOL, "can_attack": False,
-        "heal_rate": 5, "heal_range": 40, "heal_targets": 2,
+        "hp": 50, "speed": 40, "radius": 5,
+        "symbol": MEDIC_SYMBOL, "can_attack": True,
+        "fov": 30, "turn_rate": 180, "los": 80,
+        "weapon": {
+            "name": "HealLaser", "damage": -1, "range": 50, "cooldown": 0.3,
+            "hits_only_friendly": True,
+        },
     },
     "tank": {
         "hp": 300, "speed": 20, "radius": 7,
-        "damage": 5, "range": 50, "cooldown": 2.0,
         "symbol": TANK_SYMBOL, "can_attack": True,
+        "fov": 150, "turn_rate": 180, "los": 100,
+        "weapon": {"name": "Laser", "damage": 5, "range": 50, "cooldown": 2.0},
     },
     "sniper": {
-        "hp": 50, "speed": 35, "radius": 5,
-        "damage": 30, "range": 150, "cooldown": 6.0,
+        "hp": 50, "speed": 30, "radius": 5,
         "symbol": SNIPER_SYMBOL, "can_attack": True,
+        "fov": 45, "turn_rate": 180, "los": 200,
+        "weapon": {"name": "Laser", "damage": 30, "range": 150, "cooldown": 6.0},
     },
     "machine_gunner": {
         "hp": 70, "speed": 40, "radius": 5,
-        "damage": 1, "range": 50, "cooldown": 0.2,
         "symbol": MACHINE_GUNNER_SYMBOL, "can_attack": True,
+        "fov": 90, "turn_rate": 180, "los": 100,
+        "weapon": {"name": "Laser", "damage": 1, "range": 50, "cooldown": 0.1},
     },
     "scout": {
         "hp": 10, "speed": 100, "radius": 4,
-        "damage": 3, "range": 15, "cooldown": 0.5,
         "symbol": SCOUT_SYMBOL, "can_attack": True,
+        "fov": 90, "turn_rate": 180, "los": 150,
         "spawn_count": 3,
+        "weapon": {"name": "Laser", "damage": 5, "range": 15, "cooldown": 0.5},
+    },
+    "command_center": {
+        "hp": 1000, "speed": 0, "radius": 10,
+        "symbol": None, "can_attack": True,
+        "fov": 360, "turn_rate": 180, "los": 200,
+        "is_building": True,
+    },
+    "metal_extractor": {
+        "hp": 200, "speed": 0, "radius": 5,
+        "symbol": None, "can_attack": False,
+        "fov": 360, "turn_rate": 0, "los": 50,
+        "is_building": True,
     },
 }
+
+
+def get_spawnable_types() -> dict:
+    """Return only unit types that can be spawned (excludes buildings)."""
+    return {k: v for k, v in UNIT_TYPES.items() if not v.get("is_building", False)}

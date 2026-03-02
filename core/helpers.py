@@ -2,12 +2,34 @@
 from __future__ import annotations
 import math
 
+def angle_diff(a: float, b: float) -> float:
+    """Signed shortest angle from a to b, in radians. Result in (-pi, pi]."""
+    d = (b - a) % math.tau
+    if d > math.pi:
+        d -= math.tau
+    return d
+
+
 def hexagon_points(radius: float) -> list[tuple[float, float]]:
     return [
         (radius * math.cos(math.radians(60 * i - 30)),
          radius * math.sin(math.radians(60 * i - 30)))
         for i in range(6)
     ]
+
+
+def circle_overlaps_aabb(cx: float, cy: float, r: float,
+                         aabb: tuple[float, float, float, float]) -> bool:
+    """Return True if circle (cx, cy, r) overlaps axis-aligned bounding box.
+
+    *aabb* is (min_x, min_y, max_x, max_y).
+    """
+    min_x, min_y, max_x, max_y = aabb
+    nearest_x = max(min_x, min(cx, max_x))
+    nearest_y = max(min_y, min(cy, max_y))
+    dx = cx - nearest_x
+    dy = cy - nearest_y
+    return dx * dx + dy * dy <= r * r
 
 
 def line_intersects_circle(

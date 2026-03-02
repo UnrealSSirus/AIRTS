@@ -9,7 +9,7 @@ from config.settings import (
     GUI_TEXT_COLOR, GUI_PANEL_HEIGHT,
     TEAM1_COLOR, TEAM1_SELECTED_COLOR,
 )
-from config.unit_types import UNIT_TYPES
+from config.unit_types import UNIT_TYPES, get_spawnable_types
 
 _LABEL_FONT_SIZE = 14
 _LABEL_MAX_W = GUI_BTN_SIZE + GUI_BTN_GAP
@@ -60,7 +60,7 @@ def get_selected_cc(entities: list[Entity]) -> CommandCenter | None:
 
 
 def button_rects(width: int, height: int) -> list[tuple[pygame.Rect, str]]:
-    types = list(UNIT_TYPES.keys())
+    types = list(get_spawnable_types().keys())
     total_w = len(types) * GUI_BTN_SIZE + (len(types) - 1) * GUI_BTN_GAP
     start_x = (width - total_w) // 2
     y = height - GUI_PANEL_HEIGHT + 8
@@ -144,15 +144,15 @@ def _draw_tooltip(screen: pygame.Surface, utype: str, screen_h: int):
         ("HP", str(stats["hp"])),
         ("Speed", str(stats["speed"])),
     ]
-    if stats.get("can_attack") and stats["damage"] > 0:
-        rows.append(("Damage", str(stats["damage"])))
-        rows.append(("Range", str(stats["range"])))
-        cd = stats["cooldown"]
+    wpn = stats.get("weapon")
+    if wpn:
+        if wpn["damage"] < 0:
+            rows.append(("Heal/pulse", str(abs(wpn["damage"]))))
+        else:
+            rows.append(("Damage", str(wpn["damage"])))
+        rows.append(("Range", str(wpn["range"])))
+        cd = wpn["cooldown"]
         rows.append(("Cooldown", f"{cd:.1f}s" if cd != int(cd) else f"{int(cd)}s"))
-    if stats.get("heal_rate"):
-        rows.append(("Heal Rate", str(stats["heal_rate"])))
-        rows.append(("Heal Range", str(stats["heal_range"])))
-        rows.append(("Heal Targets", str(stats["heal_targets"])))
 
     # Calculate tooltip size
     name = _display_name(utype)
@@ -182,12 +182,12 @@ def handle_gui_click(
     entities: list[Entity],
     mx: int, my: int,
     width: int, height: int,
-) -> bool:
+) -> str | None:
+    """Return the unit type string clicked, or None if click was outside GUI."""
     cc = get_selected_cc(entities)
     if cc is None:
-        return False
+        return None
     for btn_rect, utype in button_rects(width, height):
         if btn_rect.collidepoint(mx, my):
-            cc.spawn_type = utype
-            return True
-    return False
+            return utype
+    return None

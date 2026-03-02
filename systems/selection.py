@@ -2,7 +2,6 @@
 from __future__ import annotations
 import math
 from entities.base import Entity
-from entities.command_center import CommandCenter
 from entities.unit import Unit
 
 
@@ -50,7 +49,7 @@ def apply_circle_selection(
     for entity in entities:
         selectable = getattr(entity, "selectable", False)
         
-        if selectable and isinstance(entity, CommandCenter):
+        if selectable and getattr(entity, 'is_building', False):
             cc = entity
         elif selectable and entity_in_circle(entity, cx, cy, sr):
             entities_to_select.append(entity)

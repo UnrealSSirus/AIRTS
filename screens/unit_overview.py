@@ -8,7 +8,7 @@ from ui.theme import (
     TG_ACTIVE, TG_INACTIVE, TG_BORDER,
 )
 from ui.widgets import BackButton
-from config.unit_types import UNIT_TYPES
+from config.unit_types import UNIT_TYPES, get_spawnable_types
 from config.settings import TEAM1_COLOR, TEAM1_SELECTED_COLOR
 
 
@@ -17,7 +17,7 @@ class UnitOverviewScreen(BaseScreen):
 
     def __init__(self, screen: pygame.Surface, clock: pygame.time.Clock):
         super().__init__(screen, clock)
-        self._types = list(UNIT_TYPES.keys())
+        self._types = list(get_spawnable_types().keys())
         self._selected = 0
         self._back = BackButton()
 
@@ -95,23 +95,21 @@ class UnitOverviewScreen(BaseScreen):
         table_y = 240
         row_h = 26
 
+        wpn = stats.get("weapon", {})
         stat_rows = [
             ("HP", str(stats["hp"])),
             ("Speed", str(stats["speed"])),
             ("Radius", str(stats["radius"])),
-            ("Damage", str(stats["damage"])),
-            ("Range", str(stats["range"])),
-            ("Cooldown", f"{stats['cooldown']}s"),
             ("Can Attack", "Yes" if stats["can_attack"] else "No"),
         ]
 
-        # Medic-specific stats
-        if "heal_rate" in stats:
-            stat_rows.append(("Heal Rate", str(stats["heal_rate"])))
-        if "heal_range" in stats:
-            stat_rows.append(("Heal Range", str(stats["heal_range"])))
-        if "heal_targets" in stats:
-            stat_rows.append(("Heal Targets", str(stats["heal_targets"])))
+        if wpn:
+            if wpn["damage"] < 0:
+                stat_rows.append(("Heal/pulse", str(abs(wpn["damage"]))))
+            else:
+                stat_rows.append(("Damage", str(wpn["damage"])))
+            stat_rows.append(("Range", str(wpn["range"])))
+            stat_rows.append(("Cooldown", f"{wpn['cooldown']}s"))
 
         for i, (label, value) in enumerate(stat_rows):
             y = table_y + i * row_h

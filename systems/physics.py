@@ -3,101 +3,139 @@ from __future__ import annotations
 import math
 import random
 from entities.unit import Unit
-from entities.shapes import CircleEntity, RectEntity
-from entities.command_center import CommandCenter
-from entities.base import Entity
-from config.settings import CC_RADIUS
+
+_sqrt = math.sqrt
+_hypot = math.hypot
+_cos = math.cos
+_sin = math.sin
+_tau = math.tau
+_rand = random.uniform
 
 
-def resolve_unit_collisions(units: list[Unit], dt: float):
-    for i in range(len(units)):
-        for j in range(i + 1, len(units)):
-            a, b = units[i], units[j]
-            dx = b.x - a.x
-            dy = b.y - a.y
-            dist = math.hypot(dx, dy)
-            min_dist = a.radius + b.radius
-            if dist < min_dist and dist > 0:
-                overlap = min_dist - dist
-                nx = dx / dist
-                ny = dy / dist
-                half = overlap * 0.5
-                a.x -= nx * half
-                a.y -= ny * half
-                b.x += nx * half
-                b.y += ny * half
-            elif dist == 0:
-                angle = random.uniform(0, math.tau)
-                a.x += math.cos(angle) * 0.5
-                a.y += math.sin(angle) * 0.5
+def _collide_pair(a, b):
+    """Resolve overlap between two units."""
+    dx = b.x - a.x
+    dy = b.y - a.y
+    dist_sq = dx * dx + dy * dy
+    min_dist = a.radius + b.radius
+    if dist_sq >= min_dist * min_dist:
+        return
+    if dist_sq > 0:
+        dist = _sqrt(dist_sq)
+        overlap = min_dist - dist
+        nx = dx / dist
+        ny = dy / dist
+        a_bld = a.is_building
+        b_bld = b.is_building
+        if a_bld and b_bld:
+            return
+        if a_bld:
+            b.x += nx * overlap
+            b.y += ny * overlap
+        elif b_bld:
+            a.x -= nx * overlap
+            a.y -= ny * overlap
+        else:
+            half = overlap * 0.5
+            a.x -= nx * half
+            a.y -= ny * half
+            b.x += nx * half
+            b.y += ny * half
+    else:
+        a_bld = a.is_building
+        b_bld = b.is_building
+        if a_bld and b_bld:
+            return
+        angle = _rand(0, _tau)
+        c = _cos(angle) * 0.5
+        s = _sin(angle) * 0.5
+        if a_bld:
+            b.x += c
+            b.y += s
+        elif b_bld:
+            a.x += c
+            a.y += s
+        else:
+            a.x += c
+            a.y += s
 
 
-def resolve_obstacle_collisions(units: list[Unit], obstacles: list[Entity], dt: float):
+def resolve_unit_collisions(units: list[Unit], dt: float, grid=None):
+    if grid is None:
+        for i in range(len(units)):
+            for j in range(i + 1, len(units)):
+                _collide_pair(units[i], units[j])
+        return
+
+    # Iterate grid cells directly — avoids building an intermediate pair list
+    cells = grid._cells
+    _offsets = ((1, 0), (-1, 1), (0, 1), (1, 1))
+    for key, bucket in cells.items():
+        n = len(bucket)
+        for i in range(n):
+            a = bucket[i]
+            for j in range(i + 1, n):
+                _collide_pair(a, bucket[j])
+        cx, cy = key
+        for dx, dy in _offsets:
+            other = cells.get((cx + dx, cy + dy))
+            if other is not None:
+                for a in bucket:
+                    for b in other:
+                        _collide_pair(a, b)
+
+
+def resolve_obstacle_collisions(units: list[Unit], circle_obs, rect_obs, dt: float):
+    """Resolve unit-vs-obstacle overlaps.
+
+    circle_obs: list of (cx, cy, radius) tuples
+    rect_obs:   list of (x, y, w, h) tuples
+    """
     for unit in units:
-        for obs in obstacles:
-            if isinstance(obs, CircleEntity):
-                _push_from_circle(unit, obs)
-            elif isinstance(obs, RectEntity):
-                _push_from_rect(unit, obs)
-
-
-def resolve_structure_collisions(units: list[Unit], ccs: list[CommandCenter], dt: float):
-    for unit in units:
-        for cc in ccs:
-            dx = unit.x - cc.x
-            dy = unit.y - cc.y
-            dist = math.hypot(dx, dy)
-            min_dist = unit.radius + CC_RADIUS
-            if dist < min_dist and dist > 0:
-                nx = dx / dist
-                ny = dy / dist
-                push = min_dist - dist
-                unit.x += nx * push
-                unit.y += ny * push
-            elif dist == 0:
-                angle = random.uniform(0, math.tau)
-                unit.x += math.cos(angle) * 0.5
-                unit.y += math.sin(angle) * 0.5
+        ux = unit.x
+        uy = unit.y
+        ur = unit.radius
+        for ox, oy, orad in circle_obs:
+            dx = ux - ox
+            dy = uy - oy
+            min_dist = ur + orad
+            dist_sq = dx * dx + dy * dy
+            if dist_sq < min_dist * min_dist:
+                if dist_sq > 0:
+                    dist = _sqrt(dist_sq)
+                    push = min_dist - dist
+                    nx = dx / dist
+                    ny = dy / dist
+                    ux += nx * push
+                    uy += ny * push
+                else:
+                    angle = _rand(0, _tau)
+                    ux += _cos(angle) * 0.5
+                    uy += _sin(angle) * 0.5
+        for rx, ry, rw, rh in rect_obs:
+            cpx = max(rx, min(ux, rx + rw))
+            cpy = max(ry, min(uy, ry + rh))
+            dx = ux - cpx
+            dy = uy - cpy
+            dist_sq = dx * dx + dy * dy
+            if dist_sq < ur * ur:
+                if dist_sq > 0:
+                    dist = _sqrt(dist_sq)
+                    push = ur - dist
+                    ux += (dx / dist) * push
+                    uy += (dy / dist) * push
+                else:
+                    angle = _rand(0, _tau)
+                    ux += _cos(angle) * 0.5
+                    uy += _sin(angle) * 0.5
+        unit.x = ux
+        unit.y = uy
 
 
 def clamp_units_to_bounds(units: list[Unit], width: int, height: int):
     for u in units:
+        if u.is_building:
+            continue
         r = u.radius
         u.x = max(r, min(u.x, width - r))
         u.y = max(r, min(u.y, height - r))
-
-
-def _push_from_circle(unit: Unit, obs: CircleEntity):
-    dx = unit.x - obs.x
-    dy = unit.y - obs.y
-    dist = math.hypot(dx, dy)
-    min_dist = unit.radius + obs.radius
-    if dist < min_dist and dist > 0:
-        nx = dx / dist
-        ny = dy / dist
-        push = min_dist - dist
-        unit.x += nx * push
-        unit.y += ny * push
-    elif dist == 0:
-        angle = random.uniform(0, math.tau)
-        unit.x += math.cos(angle) * 0.5
-        unit.y += math.sin(angle) * 0.5
-
-
-def _push_from_rect(unit: Unit, obs: RectEntity):
-    cx = max(obs.x, min(unit.x, obs.x + obs.width))
-    cy = max(obs.y, min(unit.y, obs.y + obs.height))
-    dx = unit.x - cx
-    dy = unit.y - cy
-    dist = math.hypot(dx, dy)
-    if dist < unit.radius:
-        if dist > 0:
-            nx = dx / dist
-            ny = dy / dist
-        else:
-            angle = random.uniform(0, math.tau)
-            nx = math.cos(angle)
-            ny = math.sin(angle)
-        push = unit.radius - dist
-        unit.x += nx * push
-        unit.y += ny * push
