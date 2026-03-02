@@ -45,6 +45,7 @@ class CommandCenter(Unit):
 
     def update(self, dt: float):
         super().update(dt)  # laser cooldown, no movement (is_building)
+        self.metal_extractors = [me for me in self.metal_extractors if me.alive]
         self._spawn_timer += dt * (METAL_EXTRACTOR_BOOST_FACTOR ** len(self.metal_extractors))
 
     def spawn_ready(self) -> bool:
