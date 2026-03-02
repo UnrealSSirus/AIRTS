@@ -3,12 +3,15 @@ import math
 import pygame
 from entities.shapes import CircleEntity
 from entities.base import Entity, Damageable
+from entities.weapon import Weapon
 from config.settings import (
     TEAM1_COLOR, TEAM2_COLOR, TEAM1_SELECTED_COLOR,
     SELECTED_COLOR, HEALTH_BAR_OFFSET, MEDIC_HEAL_COLOR,
-    RANGE_COLOR,
+    RANGE_COLOR, UNIT_LASER_COLOR_T1, UNIT_LASER_COLOR_T2,
+    HEAL_LASER_COLOR,
 )
 from config.unit_types import UNIT_TYPES
+from core.helpers import angle_diff
 
 # fire-mode constants
 HOLD_FIRE = "hold_fire"
@@ -18,6 +21,7 @@ FREE_FIRE = "free_fire"
 
 class Unit(CircleEntity, Damageable):
     _steer_obstacles: tuple = ()  # set by Game; tuples of (x, y, radius)
+    _spatial_grid = None          # set by Game; SpatialGrid for nearby-unit queries
 
     def __init__(self, x: float = 0, y: float = 0, team: int = 1,
                  unit_type: str = "soldier"):
@@ -32,15 +36,37 @@ class Unit(CircleEntity, Damageable):
         self.max_hp: float = stats["hp"]
         self.hp: float = float(stats["hp"])
         self.can_attack: bool = stats["can_attack"]
-        self.attack_damage: float = stats["damage"]
-        self.attack_range: float = stats["range"]
-        self.attack_cooldown_max: float = stats["cooldown"]
+
+        wdata = stats.get("weapon")
+        if wdata:
+            laser_color = wdata.get("laser_color",
+                                    UNIT_LASER_COLOR_T1 if team == 1 else UNIT_LASER_COLOR_T2)
+            if wdata.get("hits_only_friendly", False):
+                laser_color = HEAL_LASER_COLOR
+            self.weapon = Weapon(
+                name=wdata["name"],
+                damage=wdata["damage"],
+                range=wdata["range"],
+                cooldown=wdata["cooldown"],
+                laser_color=laser_color,
+                laser_width=wdata.get("laser_width", 1),
+                hits_only_friendly=wdata.get("hits_only_friendly", False),
+            )
+        else:
+            self.weapon = None
+
+        self.attack_damage: float = self.weapon.damage if self.weapon else 0
+        self.attack_range: float = self.weapon.range if self.weapon else 0
+        self.attack_cooldown_max: float = self.weapon.cooldown if self.weapon else 0
         self.laser_cooldown: float = 0.0
 
         self._symbol: tuple | None = stats["symbol"]
-        self.heal_rate: float = stats.get("heal_rate", 0)
-        self.heal_range: float = stats.get("heal_range", 0)
-        self.heal_targets: int = stats.get("heal_targets", 0)
+        self.is_building: bool = stats.get("is_building", False)
+
+        self.facing_angle: float = 0.0                                    # radians, 0 = right (+x)
+        self.fov: float = math.radians(stats.get("fov", 90))             # stored in radians
+        self.turn_rate: float = math.radians(stats.get("turn_rate", 180)) # rad/s
+        self.line_of_sight: float = float(stats.get("los", 100))         # pixels
 
         self._bounds: tuple[int, int] = (800, 600)
 
@@ -91,8 +117,54 @@ class Unit(CircleEntity, Damageable):
         if self.attack_target is not None and not self.attack_target.alive:
             self.attack_target = None
 
-        self._update_follow()
-        self._update_movement(dt)
+        if not self.is_building:
+            self._update_facing(dt)
+            self._update_follow()
+            self._update_movement(dt)
+
+    def _update_facing(self, dt: float):
+        # Priority: attack_target > closest enemy in LOS > movement target > hold
+        target_pos = None
+        if self.attack_target is not None and self.attack_target.alive:
+            target_pos = (self.attack_target.x, self.attack_target.y)
+        else:
+            # Medics: look toward nearest hurt ally; others: nearest enemy
+            healer = self.weapon is not None and self.weapon.hits_only_friendly
+            best_dist_sq = float("inf")
+            los_sq = self.line_of_sight * self.line_of_sight
+            grid = self._spatial_grid
+            candidates = grid.query_radius(self.x, self.y, self.line_of_sight) if grid is not None else ()
+            for u in candidates:
+                if u is self or not u.alive:
+                    continue
+                if healer:
+                    if u.team != self.team or u.hp >= u.max_hp:
+                        continue
+                else:
+                    if u.team == self.team:
+                        continue
+                dx = u.x - self.x
+                dy = u.y - self.y
+                d_sq = dx * dx + dy * dy
+                if d_sq <= los_sq and d_sq < best_dist_sq:
+                    best_dist_sq = d_sq
+                    target_pos = (u.x, u.y)
+            # Fall back to movement target
+            if target_pos is None and self.target is not None:
+                target_pos = self.target
+
+        if target_pos is None:
+            return
+
+        desired = math.atan2(target_pos[1] - self.y, target_pos[0] - self.x)
+        diff = angle_diff(self.facing_angle, desired)
+        max_turn = self.turn_rate * dt
+        if abs(diff) <= max_turn:
+            self.facing_angle = desired
+        else:
+            self.facing_angle += max_turn if diff > 0 else -max_turn
+        # Normalize to [0, tau)
+        self.facing_angle %= math.tau
 
     def _update_follow(self):
         ft = self._follow_entity
@@ -194,27 +266,53 @@ class Unit(CircleEntity, Damageable):
         pygame.draw.polygon(surface, (0, 0, 0), translated)
         pygame.draw.polygon(surface, self._base_color, translated, 1)
 
-    def draw(self, surface: pygame.Surface):
-        if self.target is not None:
-            pygame.draw.line(surface, self._base_color, (self.x, self.y), self.target, 1)
-            tx, ty = self.target
-            pygame.draw.circle(surface, self._base_color, (int(tx), int(ty)), 3, 1)
+    def _draw_fov_arc(self, surface: pygame.Surface, color):
+        r = int(self.attack_range)
+        if r <= 0:
+            return
+        half_fov = self.fov / 2
+        # Full circle (or nearly): fall back to simple circle
+        if self.fov >= math.tau - 0.01:
+            temp = pygame.Surface((r * 2, r * 2), pygame.SRCALPHA)
+            pygame.draw.circle(temp, color, (r, r), r, 1)
+            surface.blit(temp, (int(self.x) - r, int(self.y) - r))
+            return
 
+        # Build a polygon: center -> arc points -> center
+        cx, cy = self.x, self.y
+        start = self.facing_angle - half_fov
+        steps = max(int(math.degrees(self.fov) / 3), 8)
+        points = [(cx, cy)]
+        for i in range(steps + 1):
+            a = start + self.fov * i / steps
+            points.append((cx + r * math.cos(a), cy + r * math.sin(a)))
+        points.append((cx, cy))
+
+        temp_size = r * 2 + 4
+        temp = pygame.Surface((temp_size, temp_size), pygame.SRCALPHA)
+        ox = temp_size // 2 - cx
+        oy = temp_size // 2 - cy
+        shifted = [(px + ox, py + oy) for px, py in points]
+        pygame.draw.lines(temp, color, False, shifted, 1)
+        surface.blit(temp, (cx - temp_size // 2, cy - temp_size // 2))
+
+    def draw(self, surface: pygame.Surface):
         pygame.draw.circle(surface, self.color, (self.x, self.y), self.radius)
         self._draw_symbol(surface)
+
         if self.selected:
             pygame.draw.circle(surface, SELECTED_COLOR, (self.x, self.y), self.radius + 2, 1)
 
-        
-        if self.unit_type == "medic":
-            temp = pygame.Surface((int(self.heal_range * 2), int(self.heal_range * 2)), pygame.SRCALPHA)
-            pygame.draw.circle(temp, MEDIC_HEAL_COLOR, (self.heal_range, self.heal_range),
-                               int(self.heal_range), 1)
-            surface.blit(temp, (int(self.x) - self.heal_range, int(self.y) - self.heal_range))
-        
-        temp = pygame.Surface((int(self.attack_range * 2), int(self.attack_range * 2)), pygame.SRCALPHA)
-        pygame.draw.circle(temp, RANGE_COLOR, (self.attack_range, self.attack_range), int(self.attack_range), 1)
-        surface.blit(temp, (int(self.x) - self.attack_range, int(self.y) - self.attack_range))
+            if self.target is not None:
+                pygame.draw.line(surface, self._base_color, (self.x, self.y), self.target, 1)
+                tx, ty = self.target
+                pygame.draw.circle(surface, self._base_color, (int(tx), int(ty)), 3, 1)
+
+        if self.weapon and self.weapon.hits_only_friendly:
+            self._draw_fov_arc(surface, MEDIC_HEAL_COLOR)
+        else:
+            self._draw_fov_arc(surface, RANGE_COLOR)
+
         self.draw_health_bar(surface, self.x, self.y, self.radius + HEALTH_BAR_OFFSET)
 
     # -- serialization --------------------------------------------------------
@@ -226,6 +324,9 @@ class Unit(CircleEntity, Damageable):
             "unit_type": self.unit_type,
             "hp": self.hp,
             "laser_cooldown": self.laser_cooldown,
+            "facing_angle": self.facing_angle,
+            "line_of_sight": self.line_of_sight,
+            "is_building": self.is_building,
             "target": list(self.target) if self.target else None,
             "_stop_dist": self._stop_dist,
             "fire_mode": self.fire_mode,
@@ -246,6 +347,8 @@ class Unit(CircleEntity, Damageable):
         u.obstacle = data["obstacle"]
         u.alive = data["alive"]
         u.hp = data["hp"]
+        u.facing_angle = data.get("facing_angle", 0.0)
+        u.line_of_sight = data.get("line_of_sight", u.line_of_sight)
         u.laser_cooldown = data["laser_cooldown"]
         u.target = tuple(data["target"]) if data["target"] else None
         u._stop_dist = data["_stop_dist"]

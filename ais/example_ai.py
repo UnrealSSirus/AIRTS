@@ -1,7 +1,7 @@
 """Example user AI — drop files like this into the ais/ folder."""
 from __future__ import annotations
 import random
-from config.unit_types import UNIT_TYPES
+from config.unit_types import get_spawnable_types
 from systems.ai.base import BaseAI
 
 
@@ -19,7 +19,7 @@ class ExampleAI(BaseAI):
 
     def on_step(self, iteration: int) -> None:
         enemies = self.get_enemy_units()
-        for u in self.get_own_units():
+        for u in self.get_own_mobile_units():
             if u.target is not None:
                 continue
             if enemies:
@@ -27,4 +27,4 @@ class ExampleAI(BaseAI):
                 u.move(closest.x, closest.y)
 
         if random.random() < 0.01:
-            self.set_build(random.choice(list(UNIT_TYPES.keys())))
+            self.set_build(random.choice(list(get_spawnable_types().keys())))

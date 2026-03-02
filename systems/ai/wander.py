@@ -1,7 +1,7 @@
 """Simple AI: units wander to random locations when idle, random spawn type."""
 from __future__ import annotations
 import random
-from config.unit_types import UNIT_TYPES
+from config.unit_types import get_spawnable_types
 from config.settings import FIXED_DT
 from systems.ai.base import BaseAI
 
@@ -19,11 +19,11 @@ class WanderAI(BaseAI):
         self._timers: dict[int, float] = {}
 
     def on_start(self) -> None:
-        self.set_build(random.choice(list(UNIT_TYPES.keys())))
+        self.set_build(random.choice(list(get_spawnable_types().keys())))
 
     def on_step(self, iteration: int) -> None:
         bw, bh = self.bounds
-        for u in self.get_own_units():
+        for u in self.get_own_mobile_units():
             uid = u.entity_id
             if u.target is not None:
                 continue
@@ -40,4 +40,4 @@ class WanderAI(BaseAI):
             self._timers[uid] = timer
 
         if random.random() < 0.01:
-            self.set_build(random.choice(list(UNIT_TYPES.keys())))
+            self.set_build(random.choice(list(get_spawnable_types().keys())))

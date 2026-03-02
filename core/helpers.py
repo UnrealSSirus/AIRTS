@@ -2,6 +2,14 @@
 from __future__ import annotations
 import math
 
+def angle_diff(a: float, b: float) -> float:
+    """Signed shortest angle from a to b, in radians. Result in (-pi, pi]."""
+    d = (b - a) % math.tau
+    if d > math.pi:
+        d -= math.tau
+    return d
+
+
 def hexagon_points(radius: float) -> list[tuple[float, float]]:
     return [
         (radius * math.cos(math.radians(60 * i - 30)),

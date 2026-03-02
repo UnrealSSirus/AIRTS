@@ -20,7 +20,7 @@ class KiteBot(BaseAI):
         if cc is None:
             return
 
-        own = self.get_own_units()
+        own = self.get_own_mobile_units()
         enemies = self.get_enemy_units()
 
         # --- Build order tracking ---

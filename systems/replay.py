@@ -12,9 +12,7 @@ from typing import Any
 
 from entities.base import Entity
 from entities.unit import Unit
-from entities.command_center import CommandCenter
 from entities.metal_spot import MetalSpot
-from entities.metal_extractor import MetalExtractor
 from entities.laser import LaserFlash
 from entities.shapes import RectEntity, CircleEntity
 
@@ -64,32 +62,18 @@ def _entity_visual(e: Entity) -> dict | None:
             "hp": int(e.hp),
             "ut": e.unit_type,
         }
+        # CC-specific replay fields
+        if e.unit_type == "command_center":
+            d["t"] = "CC"
+            d["pts"] = [list(p) for p in e.points]
+        # ME-specific replay fields
+        elif e.unit_type == "metal_extractor":
+            d["t"] = "ME"
+            d["rot"] = _q2(e.rotation)
         if e.target is not None:
             d["tx"] = _q1(e.target[0])
             d["ty"] = _q1(e.target[1])
         return d
-    if isinstance(e, CommandCenter):
-        return {
-            "id": e.entity_id,
-            "t": _TYPE_CODE["CommandCenter"],
-            "x": _q1(e.x),
-            "y": _q1(e.y),
-            "c": _color_list(e._base_color),
-            "pts": [list(p) for p in e.points],
-            "tm": e.team,
-            "hp": int(e.hp),
-        }
-    if isinstance(e, MetalExtractor):
-        return {
-            "id": e.entity_id,
-            "t": _TYPE_CODE["MetalExtractor"],
-            "x": _q1(e.x),
-            "y": _q1(e.y),
-            "r": e.radius,
-            "tm": e.team,
-            "rot": _q2(e.rotation),
-            "hp": int(e.hp),
-        }
     if isinstance(e, MetalSpot):
         return {
             "id": e.entity_id,

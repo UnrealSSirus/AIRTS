@@ -9,14 +9,20 @@ from config.settings import METAL_SPOT_CAPTURE_RADIUS
 
 import math
 
-def capture_step(entities: list[Entity], command_centers: list[CommandCenter], units: list[Unit], metal_spots: list[MetalSpot], metal_extractors: list[MetalExtractor], dt: float, stats=None):
-    # for each unclaimed metal spot, check the radius, then compute team 1 units - team 2 units in the radius
+def capture_step(entities: list[Entity], command_centers: list[CommandCenter], units: list[Unit], metal_spots: list[MetalSpot], metal_extractors: list[MetalExtractor], dt: float, stats=None, grid=None):
+    cap_radius_sq = METAL_SPOT_CAPTURE_RADIUS * METAL_SPOT_CAPTURE_RADIUS
     for metal_spot in metal_spots:
         if metal_spot.owner is not None:
             continue
         unit_difference = 0
-        for unit in units:
-            if math.hypot(unit.x - metal_spot.center()[0], unit.y - metal_spot.center()[1]) > METAL_SPOT_CAPTURE_RADIUS:
+        sx, sy = metal_spot.center()
+        nearby = grid.query_radius(sx, sy, METAL_SPOT_CAPTURE_RADIUS) if grid is not None else units
+        for unit in nearby:
+            if getattr(unit, 'is_building', False):
+                continue
+            dx = unit.x - sx
+            dy = unit.y - sy
+            if dx * dx + dy * dy > cap_radius_sq:
                 continue
             if unit.team == 1:
                 unit_difference += 1

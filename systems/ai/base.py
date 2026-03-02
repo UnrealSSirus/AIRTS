@@ -11,7 +11,7 @@ from entities.unit import Unit
 from entities.command_center import CommandCenter
 from entities.metal_spot import MetalSpot
 from entities.metal_extractor import MetalExtractor
-from config.unit_types import UNIT_TYPES
+from config.unit_types import UNIT_TYPES, get_spawnable_types
 from systems.commands import GameCommand
 
 
@@ -88,6 +88,18 @@ class BaseAI(ABC):
             key=lambda e: e.entity_id,
         )
 
+    def get_mobile_units(self) -> list[Unit]:
+        return sorted(
+            [e for e in self._entities if isinstance(e, Unit) and e.alive and not e.is_building],
+            key=lambda e: e.entity_id,
+        )
+
+    def get_own_mobile_units(self) -> list[Unit]:
+        return sorted(
+            [e for e in self._entities if isinstance(e, Unit) and e.alive and e.team == self._team and not e.is_building],
+            key=lambda e: e.entity_id,
+        )
+
     def get_obstacles(self) -> list[Entity]:
         return sorted(
             [e for e in self._entities if e.obstacle],
@@ -147,8 +159,8 @@ class BaseAI(ABC):
     # -- build control ------------------------------------------------------
 
     def set_build(self, unit_type: str):
-        if unit_type not in UNIT_TYPES:
-            raise ValueError(f"Unknown unit type: {unit_type!r}")
+        if unit_type not in get_spawnable_types():
+            raise ValueError(f"Unknown or non-spawnable unit type: {unit_type!r}")
         cc = self.get_cc()
         if cc is not None:
             tick = self._game._iteration if self._game else 0

@@ -20,7 +20,7 @@ class CowardBot(BaseAI):
         if cc is None:
             return
 
-        own = self.get_own_units()
+        own = self.get_own_mobile_units()
         enemies = self.get_enemy_units()
         metal_spots = self.get_metal_spots()
 

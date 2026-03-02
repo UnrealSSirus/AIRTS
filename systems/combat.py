@@ -1,31 +1,33 @@
-"""Combat system: laser attacks, medic healing, command-center aura healing."""
+"""Combat system: laser attacks, heal-laser healing, command-center aura healing."""
 from __future__ import annotations
 import math
 from entities.base import Entity
 from entities.shapes import CircleEntity, RectEntity
 from entities.unit import Unit, HOLD_FIRE, TARGET_FIRE, FREE_FIRE
 from entities.command_center import CommandCenter
-from entities.metal_extractor import MetalExtractor
 from entities.laser import LaserFlash
-from core.helpers import line_intersects_circle, line_intersects_rect
+from core.helpers import line_intersects_circle, line_intersects_rect, angle_diff
 from config.settings import (
-    CC_LASER_RANGE, CC_LASER_DAMAGE, CC_LASER_COOLDOWN,
-    UNIT_LASER_COLOR_T1, UNIT_LASER_COLOR_T2,
-    CC_LASER_COLOR_T1, CC_LASER_COLOR_T2,
     CC_HEAL_RADIUS, CC_HEAL_RATE,
 )
 
 
-def has_los(x1: float, y1: float, x2: float, y2: float,
-            obstacles: list[Entity]) -> bool:
-    for obs in obstacles:
-        if isinstance(obs, CircleEntity):
-            if line_intersects_circle(x1, y1, x2, y2, obs.x, obs.y, obs.radius):
-                return False
-        elif isinstance(obs, RectEntity):
-            if line_intersects_rect(x1, y1, x2, y2, obs.x, obs.y, obs.width, obs.height):
-                return False
+def _has_los(x1: float, y1: float, x2: float, y2: float,
+             circle_obs, rect_obs) -> bool:
+    """LOS check using pre-extracted obstacle tuples (no isinstance)."""
+    for cx, cy, r in circle_obs:
+        if line_intersects_circle(x1, y1, x2, y2, cx, cy, r):
+            return False
+    for rx, ry, rw, rh in rect_obs:
+        if line_intersects_rect(x1, y1, x2, y2, rx, ry, rw, rh):
+            return False
     return True
+
+
+def _in_fov(unit: Unit, tx: float, ty: float) -> bool:
+    """Return True if (tx, ty) is within the unit's field of view."""
+    to_target = math.atan2(ty - unit.y, tx - unit.x)
+    return abs(angle_diff(unit.facing_angle, to_target)) <= unit.fov / 2
 
 
 def _pick_unit_target(
@@ -34,7 +36,8 @@ def _pick_unit_target(
     a_range: float,
     combatants: list,
     own_idx: int,
-    obstacles: list[Entity],
+    circle_obs, rect_obs,
+    grid=None,
 ) -> Entity | None:
     """Select a target respecting the unit's fire_mode and attack_target."""
     if a.fire_mode == HOLD_FIRE:
@@ -49,111 +52,129 @@ def _pick_unit_target(
         if preferred is None:
             return None
         d = math.hypot(preferred.x - ax, preferred.y - ay)
-        if d <= a_range and has_los(ax, ay, preferred.x, preferred.y, obstacles):
+        if d <= a_range and _in_fov(a, preferred.x, preferred.y) and _has_los(ax, ay, preferred.x, preferred.y, circle_obs, rect_obs):
             return preferred
         return None
 
     # FREE_FIRE: prefer attack_target, else closest enemy
     if preferred is not None:
         d = math.hypot(preferred.x - ax, preferred.y - ay)
-        if d <= a_range and has_los(ax, ay, preferred.x, preferred.y, obstacles):
+        if d <= a_range and _in_fov(a, preferred.x, preferred.y) and _has_los(ax, ay, preferred.x, preferred.y, circle_obs, rect_obs):
             return preferred
 
     best: Entity | None = None
-    best_dist = float("inf")
-    for j, b in enumerate(combatants):
-        if j == own_idx or not b.alive or b.team == a.team:
+    best_dist_sq = float("inf")
+    range_sq = a_range * a_range
+    candidates = grid.query_radius(ax, ay, a_range) if grid is not None else combatants
+    for b in candidates:
+        if b is a or not b.alive or b.team == a.team:
             continue
-        d = math.hypot(b.x - ax, b.y - ay)
-        if d <= a_range and d < best_dist:
-            if has_los(ax, ay, b.x, b.y, obstacles):
-                best_dist = d
+        dx = b.x - ax
+        dy = b.y - ay
+        d_sq = dx * dx + dy * dy
+        if d_sq <= range_sq and d_sq < best_dist_sq:
+            if not _in_fov(a, b.x, b.y):
+                continue
+            if _has_los(ax, ay, b.x, b.y, circle_obs, rect_obs):
+                best_dist_sq = d_sq
                 best = b
+    return best
+
+
+def _pick_friendly_target(
+    a: Unit, ax: float, ay: float, a_range: float,
+    units: list[Unit], circle_obs, rect_obs,
+    grid=None,
+) -> Unit | None:
+    """Pick closest friendly unit that needs healing within range + LOS."""
+    best: Unit | None = None
+    best_dist_sq = float("inf")
+    range_sq = a_range * a_range
+    candidates = grid.query_radius(ax, ay, a_range) if grid is not None else units
+    for u in candidates:
+        if u is a or not u.alive or u.team != a.team:
+            continue
+        if u.hp >= u.max_hp:
+            continue
+        dx = u.x - ax
+        dy = u.y - ay
+        d_sq = dx * dx + dy * dy
+        if d_sq <= range_sq and d_sq < best_dist_sq:
+            if not _in_fov(a, u.x, u.y):
+                continue
+            if _has_los(ax, ay, u.x, u.y, circle_obs, rect_obs):
+                best_dist_sq = d_sq
+                best = u
     return best
 
 
 def combat_step(
     units: list[Unit],
-    command_centers: list[CommandCenter],
-    metal_extractors: list[MetalExtractor],
     obstacles: list[Entity],
     laser_flashes: list[LaserFlash],
     dt: float,
     stats=None,
+    grid=None,
 ):
-    combatants: list = units + command_centers + metal_extractors  # type: ignore[operator]
+    # Pre-extract obstacle geometry once — avoids isinstance in inner loops
+    circle_obs = tuple(
+        (obs.x, obs.y, obs.radius)
+        for obs in obstacles if isinstance(obs, CircleEntity)
+    )
+    rect_obs = tuple(
+        (obs.x, obs.y, obs.width, obs.height)
+        for obs in obstacles if isinstance(obs, RectEntity)
+    )
+
+    combatants = [u for u in units if u.alive]
 
     for i, a in enumerate(combatants):
-        if isinstance(a, MetalExtractor):
-            continue
         if not a.alive or a.laser_cooldown > 0:
             continue
-        if isinstance(a, Unit) and not a.can_attack:
+        if not a.can_attack:
             continue
 
-        a_team = a.team
-        ax, ay = a.x, a.y
+        wpn = a.weapon
+        if wpn is None:
+            continue
 
-        if isinstance(a, Unit):
-            a_range = a.attack_range
-            a_dmg = a.attack_damage
-            a_cd = a.attack_cooldown_max
-            best_target = _pick_unit_target(a, ax, ay, a_range, combatants, i, obstacles)
+        ax, ay = a.x, a.y
+        a_range = wpn.range
+        a_dmg = wpn.damage
+        a_cd = wpn.cooldown
+
+        if wpn.hits_only_friendly:
+            best_target = _pick_friendly_target(a, ax, ay, a_range, combatants, circle_obs, rect_obs, grid)
         else:
-            a_range = CC_LASER_RANGE
-            a_dmg = CC_LASER_DAMAGE
-            a_cd = CC_LASER_COOLDOWN
-            best_target = None
-            best_dist = float("inf")
-            for j, b in enumerate(combatants):
-                if j == i or not b.alive or b.team == a_team:
-                    continue
-                d = math.hypot(b.x - ax, b.y - ay)
-                if d <= a_range and d < best_dist:
-                    if has_los(ax, ay, b.x, b.y, obstacles):
-                        best_dist = d
-                        best_target = b
+            best_target = _pick_unit_target(a, ax, ay, a_range, combatants, i, circle_obs, rect_obs, grid)
 
         if best_target is not None:
-            was_alive = best_target.alive
-            best_target.take_damage(a_dmg)
-            if stats is not None:
-                target_team = best_target.team if hasattr(best_target, "team") else 0
-                if target_team:
-                    stats.record_damage(a_team, target_team, a_dmg)
-                    if was_alive and not best_target.alive:
-                        stats.record_kill(a_team, target_team)
+            if a_dmg < 0:
+                # Healing weapon
+                heal_amt = abs(a_dmg)
+                old_hp = best_target.hp
+                best_target.hp = min(best_target.max_hp, best_target.hp + heal_amt)
+                actual = best_target.hp - old_hp
+                if stats is not None and actual > 0:
+                    stats.record_healing(a.team, actual)
+            else:
+                # Damage weapon
+                was_alive = best_target.alive
+                best_target.take_damage(a_dmg)
+                if stats is not None:
+                    target_team = best_target.team if hasattr(best_target, "team") else 0
+                    if target_team:
+                        stats.record_damage(a.team, target_team, a_dmg)
+                        if was_alive and not best_target.alive:
+                            stats.record_kill(a.team, target_team)
+
             a.laser_cooldown = a_cd
-            lc = (UNIT_LASER_COLOR_T1 if isinstance(a, Unit) and a_team == 1
-                  else UNIT_LASER_COLOR_T2 if isinstance(a, Unit)
-                  else CC_LASER_COLOR_T1 if a_team == 1
-                  else CC_LASER_COLOR_T2)
-            w = 1 if isinstance(a, Unit) else 2
+            lc = wpn.laser_color
+            w = wpn.laser_width
             laser_flashes.append(
-                LaserFlash(ax, ay, best_target.x, best_target.y, lc, w)
+                LaserFlash(ax, ay, best_target.x, best_target.y, lc, w,
+                           source=a, target=best_target)
             )
-
-
-def medic_heal_step(units: list[Unit], dt: float, stats=None):
-    for medic in units:
-        if medic.unit_type != "medic" or not medic.alive:
-            continue
-        heal_amount = medic.heal_rate * dt
-        candidates: list[tuple[float, Unit]] = []
-        for u in units:
-            if u is medic or u.team != medic.team or not u.alive:
-                continue
-            if u.hp >= u.max_hp:
-                continue
-            d = math.hypot(u.x - medic.x, u.y - medic.y)
-            if d <= medic.heal_range:
-                candidates.append((d, u))
-        candidates.sort(key=lambda t: t[0])
-        for _, target in candidates[:medic.heal_targets]:
-            old_hp = target.hp
-            target.hp = min(target.max_hp, target.hp + heal_amount)
-            if stats is not None:
-                stats.record_healing(medic.team, target.hp - old_hp)
 
 
 def cc_heal_step(
@@ -161,18 +182,24 @@ def cc_heal_step(
     units: list[Unit],
     dt: float,
     stats=None,
+    grid=None,
 ):
+    heal_radius_sq = CC_HEAL_RADIUS * CC_HEAL_RADIUS
     for cc in command_centers:
         if not cc.alive:
             continue
         heal_amount = CC_HEAL_RATE * dt
-        for unit in units:
+        nearby = grid.query_radius(cc.x, cc.y, CC_HEAL_RADIUS) if grid is not None else units
+        for unit in nearby:
+            if unit is cc:
+                continue
             if unit.team != cc.team or not unit.alive:
                 continue
             if unit.hp >= unit.max_hp:
                 continue
-            d = math.hypot(unit.x - cc.x, unit.y - cc.y)
-            if d <= CC_HEAL_RADIUS:
+            dx = unit.x - cc.x
+            dy = unit.y - cc.y
+            if dx * dx + dy * dy <= heal_radius_sq:
                 old_hp = unit.hp
                 unit.hp = min(unit.max_hp, unit.hp + heal_amount)
                 if stats is not None:

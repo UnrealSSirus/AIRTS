@@ -2,58 +2,49 @@ from __future__ import annotations
 import math
 import random
 import pygame
-from entities.shapes import PolygonEntity
-from entities.base import Damageable
 from entities.unit import Unit
-from entities.metal_extractor import MetalExtractor
+from entities.weapon import Weapon
 from core.helpers import hexagon_points
 from config.settings import (
     TEAM1_COLOR, TEAM2_COLOR, TEAM1_SELECTED_COLOR, SELECTED_COLOR, DEFAULT_COLOR,
     CC_HP, CC_SPAWN_INTERVAL, CC_RADIUS, HEALTH_BAR_OFFSET,
     CC_HEAL_RADIUS, CC_HEAL_COLOR_T1, CC_HEAL_COLOR_T2,
     CC_HEAL_RING_T1, CC_HEAL_RING_T2,
-    METAL_EXTRACTOR_BOOST_FACTOR,
+    CC_LASER_DAMAGE, CC_LASER_RANGE, CC_LASER_COOLDOWN,
+    CC_LASER_COLOR_T1, CC_LASER_COLOR_T2,
+    METAL_EXTRACTOR_BOOST_FACTOR, RANGE_COLOR,
 )
 
 
-class CommandCenter(PolygonEntity, Damageable):
+class CommandCenter(Unit):
     def __init__(self, x: float = 0, y: float = 0, team: int = 1):
-        hex_pts = hexagon_points(CC_RADIUS)
-        super().__init__(x, y, hex_pts)
-        self.team = team
-        self.color = TEAM1_COLOR if team == 1 else TEAM2_COLOR
-        self._base_color = self.color
+        super().__init__(x, y, team, unit_type="command_center")
 
-        self.max_hp: float = CC_HP
-        self.hp: float = float(CC_HP)
-        self.laser_cooldown: float = 0.0
+        # CC-specific weapon (team-dependent laser color, not from config)
+        self.weapon = Weapon(
+            name="Laser",
+            damage=CC_LASER_DAMAGE,
+            range=CC_LASER_RANGE,
+            cooldown=CC_LASER_COOLDOWN,
+            laser_color=CC_LASER_COLOR_T1 if team == 1 else CC_LASER_COLOR_T2,
+            laser_width=2,
+        )
+        self.attack_damage = self.weapon.damage
+        self.attack_range = self.weapon.range
+        self.attack_cooldown_max = self.weapon.cooldown
 
+        # Hexagon points for drawing (visual only; collision uses radius)
+        self.points = hexagon_points(CC_RADIUS)
+
+        # CC-specific state
         self._spawn_timer: float = 0.0
         self._bounds: tuple[int, int] = (800, 600)
         self.rally_point: tuple[float, float] | None = None
         self.spawn_type: str = "soldier"
-        self.metal_extractors: list[MetalExtractor] = []
-
-        self.selectable: bool = False
-
-    def set_selected(self, value: bool):
-        if not self.selectable:
-            return
-        self.selected = value
-        self.color = TEAM1_SELECTED_COLOR if value else self._base_color
-
-    def collision_radius(self) -> float:
-        return CC_RADIUS
-
-    def center(self) -> tuple[float, float]:
-        return (self.x, self.y)
-
-    def get_rect(self) -> pygame.Rect:
-        r = CC_RADIUS
-        return pygame.Rect(self.x - r, self.y - r, r * 2, r * 2)
+        self.metal_extractors: list = []
 
     def update(self, dt: float):
-        self.laser_cooldown = max(0.0, self.laser_cooldown - dt)
+        super().update(dt)  # laser cooldown, no movement (is_building)
         self._spawn_timer += dt * (METAL_EXTRACTOR_BOOST_FACTOR ** len(self.metal_extractors))
 
     def spawn_ready(self) -> bool:
@@ -111,6 +102,9 @@ class CommandCenter(PolygonEntity, Damageable):
             arc_r = CC_RADIUS + 5
             pygame.draw.circle(surface, SELECTED_COLOR, (int(self.x), int(self.y)), int(arc_r), 2)
 
+        # FOV/range arc (inherited from Unit)
+        self._draw_fov_arc(surface, RANGE_COLOR)
+
         self.draw_health_bar(surface, self.x, self.y, CC_RADIUS + HEALTH_BAR_OFFSET, bar_w=40)
 
         if self.rally_point is not None:
@@ -126,14 +120,9 @@ class CommandCenter(PolygonEntity, Damageable):
     def to_dict(self) -> dict:
         d = super().to_dict()
         d.update({
-            "team": self.team,
-            "hp": self.hp,
-            "laser_cooldown": self.laser_cooldown,
             "_spawn_timer": self._spawn_timer,
             "spawn_type": self.spawn_type,
             "rally_point": list(self.rally_point) if self.rally_point else None,
-            "selectable": self.selectable,
-            "_bounds": list(self._bounds),
             "metal_extractor_ids": [me.entity_id for me in self.metal_extractors if me.alive],
         })
         return d
@@ -148,11 +137,19 @@ class CommandCenter(PolygonEntity, Damageable):
         cc.alive = data["alive"]
         cc.hp = data["hp"]
         cc.laser_cooldown = data["laser_cooldown"]
+        cc.facing_angle = data.get("facing_angle", 0.0)
+        cc.line_of_sight = data.get("line_of_sight", cc.line_of_sight)
+        cc.fire_mode = data.get("fire_mode", cc.fire_mode)
+        cc.selectable = data.get("selectable", False)
+        cc._bounds = tuple(data["_bounds"])
         cc._spawn_timer = data["_spawn_timer"]
         cc.spawn_type = data["spawn_type"]
-        cc.rally_point = tuple(data["rally_point"]) if data["rally_point"] else None
-        cc.selectable = data["selectable"]
-        cc._bounds = tuple(data["_bounds"])
+        cc.rally_point = tuple(data["rally_point"]) if data.get("rally_point") else None
+        cc.target = tuple(data["target"]) if data.get("target") else None
+        cc._stop_dist = data.get("_stop_dist", 0.0)
+        cc._follow_dist = data.get("_follow_dist", 0.0)
+        cc._follow_entity = None
+        cc.attack_target = None
         # cross-references resolved later by Game.load_state()
         cc.metal_extractors = []
         return cc

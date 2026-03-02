@@ -34,8 +34,8 @@ COMMAND_DOT_COLOR = (255, 255, 100)
 PATH_SAMPLE_MIN_DIST = 4.0
 
 # -- laser visuals ----------------------------------------------------------
-UNIT_LASER_COLOR_T1 = (120, 180, 255)
-UNIT_LASER_COLOR_T2 = (255, 120, 120)
+UNIT_LASER_COLOR_T1 = (255, 255, 0)
+UNIT_LASER_COLOR_T2 = (255, 255, 0)
 CC_LASER_COLOR_T1 = (180, 220, 255)
 CC_LASER_COLOR_T2 = (255, 180, 180)
 LASER_FLASH_DURATION = 1.0
@@ -84,6 +84,7 @@ HEALTH_BAR_LOW = (220, 0, 0)
 
 # -- medic ------------------------------------------------------------------
 MEDIC_HEAL_COLOR = (100, 255, 150, 80)
+HEAL_LASER_COLOR = (100, 255, 150)
 
 # -- GUI panel --------------------------------------------------------------
 GUI_BG = (30, 30, 40)
