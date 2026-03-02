@@ -72,7 +72,12 @@ METAL_SPOT_CAPTURE_RATE = 0.05  # 5% of the spot's capture progress per unit per
 METAL_EXTRACTOR_RADIUS = 5.0
 
 METAL_EXTRACTOR_HP = 200
-METAL_EXTRACTOR_BOOST_FACTOR = 1.05
+METAL_EXTRACTOR_SPAWN_BONUS = 0.08          # 8% additive per extractor
+
+REINFORCE_BONUS_MULTIPLIER = 2              # doubles bonus when fully reinforced
+REINFORCE_HP_BONUS = 100
+REINFORCE_STACK_INTERVAL = 15.0             # seconds per plating stack
+REINFORCE_MAX_STACKS = 4
 
 # -- health bars ------------------------------------------------------------
 HEALTH_BAR_WIDTH = 24

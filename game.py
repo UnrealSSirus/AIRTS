@@ -26,6 +26,7 @@ from config.settings import (
     SELECTION_FILL_COLOR, SELECTION_RECT_COLOR,
     COMMAND_PATH_COLOR, COMMAND_DOT_COLOR, PATH_SAMPLE_MIN_DIST,
     FIXED_DT, MAX_FRAME_DT, CC_RADIUS,
+    TEAM1_COLOR, TEAM2_COLOR, HEALTH_BAR_OFFSET,
 )
 from entities.shapes import RectEntity, CircleEntity, PolygonEntity
 from systems.commands import GameCommand, CommandQueue
@@ -760,15 +761,31 @@ class Game:
             for lf in self.laser_flashes:
                 lf.draw(self.screen)
 
-        # AI / Human name labels above command centers
+        # AI / Human name labels above command centers (with bonus %)
         for entity in self.entities:
             if isinstance(entity, CommandCenter) and entity.alive:
                 ai = self.team_ai.get(entity.team)
                 name = ai.ai_name if ai else self._player_name
-                name_surf = self._label_font.render(name, True, (220, 220, 220))
+                bonus_pct = entity.get_total_bonus_percent()
+                if bonus_pct > 0:
+                    name = f"{name} (+{bonus_pct}%)"
+                team_color = TEAM1_COLOR if entity.team == 1 else TEAM2_COLOR
+                name_surf = self._label_font.render(name, True, team_color)
                 nx = int(entity.x) - name_surf.get_width() // 2
                 ny = int(entity.y) - 40
                 self.screen.blit(name_surf, (nx, ny))
+
+        # Extractor bonus labels
+        for entity in self.entities:
+            if isinstance(entity, MetalExtractor) and entity.alive:
+                bonus = entity.get_spawn_bonus()
+                pct = round(bonus * 100)
+                team_color = TEAM1_COLOR if entity.team == 1 else TEAM2_COLOR
+                label = f"+{pct}%"
+                label_surf = self._label_font.render(label, True, team_color)
+                lx = int(entity.x) - label_surf.get_width() // 2
+                ly = int(entity.y) - int(entity.radius + HEALTH_BAR_OFFSET + 12)
+                self.screen.blit(label_surf, (lx, ly))
 
         if self._dragging:
             sr = self._selection_radius()

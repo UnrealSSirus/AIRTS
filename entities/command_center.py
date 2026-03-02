@@ -12,7 +12,7 @@ from config.settings import (
     CC_HEAL_RING_T1, CC_HEAL_RING_T2,
     CC_LASER_DAMAGE, CC_LASER_RANGE, CC_LASER_COOLDOWN,
     CC_LASER_COLOR_T1, CC_LASER_COLOR_T2,
-    METAL_EXTRACTOR_BOOST_FACTOR, RANGE_COLOR,
+    RANGE_COLOR,
 )
 
 
@@ -46,7 +46,13 @@ class CommandCenter(Unit):
     def update(self, dt: float):
         super().update(dt)  # laser cooldown, no movement (is_building)
         self.metal_extractors = [me for me in self.metal_extractors if me.alive]
-        self._spawn_timer += dt * (METAL_EXTRACTOR_BOOST_FACTOR ** len(self.metal_extractors))
+        bonus = sum(me.get_spawn_bonus() for me in self.metal_extractors)
+        self._spawn_timer += dt * (1.0 + bonus)
+
+    def get_total_bonus_percent(self) -> int:
+        """Return total spawn bonus as an integer percentage (e.g. 32 for +32%)."""
+        bonus = sum(me.get_spawn_bonus() for me in self.metal_extractors)
+        return round(bonus * 100)
 
     def spawn_ready(self) -> bool:
         return self._spawn_timer >= CC_SPAWN_INTERVAL

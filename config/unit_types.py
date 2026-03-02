@@ -84,7 +84,7 @@ UNIT_TYPES = {
         "is_building": True,
     },
     "metal_extractor": {
-        "hp": 200, "speed": 0, "radius": 5,
+        "hp": 150, "speed": 0, "radius": 5,
         "symbol": None, "can_attack": False,
         "fov": 360, "turn_rate": 0, "los": 50,
         "is_building": True,
