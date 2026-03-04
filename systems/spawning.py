@@ -11,6 +11,7 @@ def spawn_step(
     human_teams: set[int],
     stats=None,
     tick: int = 0,
+    units: list | None = None,
 ):
     """Spawn units from any command center whose timer is ready.
 
@@ -26,6 +27,8 @@ def spawn_step(
             u = cc.spawn_unit()
             u.selectable = u.team in human_teams
             entities.append(u)
+            if units is not None:
+                units.append(u)
             if stats is not None:
                 stats.record_spawn(u.team, u.unit_type, tick)
         cc.reset_spawn()

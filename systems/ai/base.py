@@ -61,6 +61,10 @@ class BaseAI(ABC):
         return self._game.entities
 
     @property
+    def _units(self) -> list[Unit]:
+        return self._game.units
+
+    @property
     def bounds(self) -> tuple[int, int]:
         return (self._game.width, self._game.height)
 
@@ -72,32 +76,32 @@ class BaseAI(ABC):
 
     def get_units(self) -> list[Unit]:
         return sorted(
-            [e for e in self._entities if isinstance(e, Unit) and e.alive],
-            key=lambda e: e.entity_id,
+            [u for u in self._units if u.alive],
+            key=lambda u: u.entity_id,
         )
 
     def get_own_units(self) -> list[Unit]:
         return sorted(
-            [e for e in self._entities if isinstance(e, Unit) and e.alive and e.team == self._team],
-            key=lambda e: e.entity_id,
+            [u for u in self._units if u.alive and u.team == self._team],
+            key=lambda u: u.entity_id,
         )
 
     def get_enemy_units(self) -> list[Unit]:
         return sorted(
-            [e for e in self._entities if isinstance(e, Unit) and e.alive and e.team != self._team],
-            key=lambda e: e.entity_id,
+            [u for u in self._units if u.alive and u.team != self._team],
+            key=lambda u: u.entity_id,
         )
 
     def get_mobile_units(self) -> list[Unit]:
         return sorted(
-            [e for e in self._entities if isinstance(e, Unit) and e.alive and not e.is_building],
-            key=lambda e: e.entity_id,
+            [u for u in self._units if u.alive and not u.is_building],
+            key=lambda u: u.entity_id,
         )
 
     def get_own_mobile_units(self) -> list[Unit]:
         return sorted(
-            [e for e in self._entities if isinstance(e, Unit) and e.alive and e.team == self._team and not e.is_building],
-            key=lambda e: e.entity_id,
+            [u for u in self._units if u.alive and u.team == self._team and not u.is_building],
+            key=lambda u: u.entity_id,
         )
 
     def get_obstacles(self) -> list[Entity]:

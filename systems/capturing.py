@@ -34,6 +34,7 @@ def capture_step(entities: list[Entity], command_centers: list[CommandCenter], u
             metal_spot.claim(1)
             metal_extractor = MetalExtractor(metal_spot=metal_spot, team=1)
             entities.append(metal_extractor)
+            metal_extractors.append(metal_extractor)
             cc = next((c for c in command_centers if c.team == 1), None)
             if cc is not None:
                 cc.metal_extractors.append(metal_extractor)
@@ -43,6 +44,7 @@ def capture_step(entities: list[Entity], command_centers: list[CommandCenter], u
             metal_spot.claim(2)
             metal_extractor = MetalExtractor(metal_spot=metal_spot, team=2)
             entities.append(metal_extractor)
+            metal_extractors.append(metal_extractor)
             cc = next((c for c in command_centers if c.team == 2), None)
             if cc is not None:
                 cc.metal_extractors.append(metal_extractor)

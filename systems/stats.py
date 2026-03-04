@@ -33,7 +33,7 @@ class TeamStats:
 class GameStats:
     """Accumulates game statistics for both teams."""
 
-    SAMPLE_INTERVAL = 60  # ticks between time-series snapshots
+    SAMPLE_INTERVAL = 100  # ticks between time-series snapshots (~1.67s at 60 tps)
 
     def __init__(self):
         self.teams: dict[int, TeamStats] = {1: TeamStats(), 2: TeamStats()}
@@ -44,9 +44,11 @@ class GameStats:
 
         # Per-subsystem timing breakdown (ms)
         self._subsystem_names = [
-            "grid_build", "facing_precompute", "entity_update", "ai_step",
-            "capture", "combat", "spawn",
-            "physics", "filtering",
+            "commands", "grid_build", "facing_precompute", "entity_update",
+            "ai_step", "capture", "obs_geom", "combat",
+            "spawn", "cleanup", "physics",
+            "phys_array_build", "phys_unit_collisions",
+            "phys_obstacle_push", "phys_writeback", "phys_clamp",
         ]
         self._subsystem_bufs: dict[str, list[float]] = {n: [] for n in self._subsystem_names}
         self.ts_subsystems: dict[str, list[float]] = {n: [] for n in self._subsystem_names}

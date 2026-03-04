@@ -102,6 +102,27 @@ SCORE_FONT_SIZE = 28
 SCORE_T1_COLOR = (100, 180, 255)
 SCORE_T2_COLOR = (255, 120, 120)
 STATS_HEADER_FONT_SIZE = 40
+
+# -- debug performance graph ------------------------------------------------
+DEBUG_LINE_COLORS = [
+    (255, 215, 0),     # step_ms — gold/yellow
+    (200, 200, 200),   # commands — light gray
+    (80, 160, 255),    # grid_build — blue
+    (255, 90, 90),     # facing_precompute — red
+    (80, 220, 120),    # entity_update — green
+    (180, 100, 255),   # ai_step — purple
+    (255, 165, 60),    # capture — orange
+    (140, 100, 80),    # obs_geom — brown
+    (80, 220, 220),    # combat — cyan
+    (255, 130, 180),   # spawn — pink
+    (255, 255, 140),   # cleanup — pale yellow
+    (160, 255, 80),    # physics — lime
+    (120, 180, 60),    # phys_array_build — olive
+    (200, 255, 100),   # phys_unit_collisions — bright lime
+    (100, 200, 140),   # phys_obstacle_push — teal-green
+    (180, 220, 60),    # phys_writeback — yellow-green
+    (140, 240, 180),   # phys_clamp — mint
+]
 STATS_SUB_FONT_SIZE = 18
 BUILD_ORDER_RADIUS = 6
 

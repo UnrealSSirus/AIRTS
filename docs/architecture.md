@@ -116,17 +116,16 @@ The simulation tick runs systems in this exact order:
 3.  Facing precompute    Pre-compute nearest enemy/heal target per unit (grid queries)
                          with AABB early-exits to skip cross-team scans
 4.  Entity update        for entity in entities: entity.update(dt)
-5.  Filtering            Build units, ccs, obstacles, metal_extractors lists
-6.  AI step              for ai in team_ai.values(): ai.on_step(iteration)
-7.  Capture step         capture_step(...)
-8.  Combat step          combat_step(...) + cc_heal_step(...)
+5.  AI step              for ai in team_ai.values(): ai.on_step(iteration)
+6.  Capture step         capture_step(...)
+7.  Combat step          combat_step(...) + cc_heal_step(...)
                          (uses pre-extracted obstacle tuples + team AABBs)
-9.  Spawn step           spawn_step(...)
-10. Prune dead           entities = [e for e in entities if e.alive]
-11. Physics              resolve_unit_collisions, batch_obstacle_push,
+8.  Spawn step           spawn_step(...)
+9. Prune dead           entities = [e for e in entities if e.alive]
+10. Physics              resolve_unit_collisions, batch_obstacle_push,
                          clamp_units_to_bounds (skipped via cooldown when idle)
-12. Laser flash update   laser_flashes = [lf for lf if lf.update(dt)]
-13. Increment iteration
+11. Laser flash update   laser_flashes = [lf for lf if lf.update(dt)]
+12. Increment iteration
 ```
 
 Key implications:

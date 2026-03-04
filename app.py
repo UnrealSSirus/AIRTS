@@ -15,6 +15,7 @@ from screens.replay_playback import ReplayPlaybackScreen
 from screens.crash_notice import CrashNoticeScreen
 from screens.options import OptionsScreen
 from screens.arena_screen import ArenaScreen
+from screens.debug_screen import DebugScreen
 
 
 class App:
@@ -91,6 +92,26 @@ class App:
                                  winner, human_teams, stats=stats,
                                  replay_filepath=replay_filepath,
                                  team_names=team_names).run()
+
+        elif name == "debug":
+            return DebugScreen(self._screen, self._clock,
+                               winner=data.get("winner", 0),
+                               human_teams=data.get("human_teams", set()),
+                               stats=data.get("stats"),
+                               replay_filepath=data.get("replay_filepath"),
+                               team_names=data.get("team_names", {})).run()
+
+        elif name == "replay_debug":
+            filepath = data.get("filepath", "")
+            stats = data.get("stats")
+            # Resize to menu dimensions for debug screen
+            self._screen = pygame.display.set_mode((MENU_WIDTH, MENU_HEIGHT))
+            result = DebugScreen(self._screen, self._clock,
+                                 stats=stats).run()
+            if result.next_screen == "quit":
+                return result
+            # Return to replay playback
+            return ScreenResult("replay_playback", data={"filepath": filepath})
 
         elif name == "crash_notice":
             return CrashNoticeScreen(self._screen, self._clock,

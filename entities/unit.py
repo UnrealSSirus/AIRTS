@@ -107,7 +107,8 @@ class Unit(CircleEntity, Damageable):
         self.fire_mode: str = FREE_FIRE
 
         self.selectable: bool = False
-        self._facing_target: tuple[float, float] | None = None  # set by batch_facing_targets
+        self._facing_target: Entity | None = None   # entity ref, set by facing_precompute
+        self._facing_reeval_cd: int = 0              # ticks until next re-evaluation
 
         # -- abilities ----------------------------------------------------------
         self.abilities: list = []
@@ -167,15 +168,15 @@ class Unit(CircleEntity, Damageable):
             self._update_movement(dt)
 
     def _update_facing(self, dt: float):
-        # Priority: attack_target > batch-computed nearest > movement target > hold
+        # Priority: attack_target > cached nearest enemy/ally > movement target > hold
         target_pos = None
         if self.attack_target is not None and self.attack_target.alive:
             target_pos = (self.attack_target.x, self.attack_target.y)
+        elif self._facing_target is not None and self._facing_target.alive:
+            target_pos = (self._facing_target.x, self._facing_target.y)
         else:
-            # Use pre-computed batch result (set by game.py via batch_facing_targets)
-            target_pos = self._facing_target
             # Fall back to movement target
-            if target_pos is None and self.target is not None:
+            if self.target is not None:
                 target_pos = self.target
 
         if target_pos is None:

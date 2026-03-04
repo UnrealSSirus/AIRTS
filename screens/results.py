@@ -95,16 +95,21 @@ class ResultsScreen(BaseScreen):
         self._name1 = self._team_names.get(1, "Team 1")
         self._name2 = self._team_names.get(2, "Team 2")
 
-        # Buttons — centered side by side at bottom
-        gap = 20
-        total_w = BTN_WIDTH * 2 + gap
+        # Buttons — three centered side by side at bottom
+        btn_w = 240
+        gap = 10
+        total_w = btn_w * 3 + gap * 2
         start_x = self.width // 2 - total_w // 2
         btn_y = self.height - 50
 
-        self._btn = Button(start_x, btn_y, BTN_WIDTH, BTN_HEIGHT, "Return to Menu")
-        self._replay_btn = Button(start_x + BTN_WIDTH + gap, btn_y,
-                                  BTN_WIDTH, BTN_HEIGHT, "Watch Replay",
+        self._btn = Button(start_x, btn_y, btn_w, BTN_HEIGHT, "Return to Menu")
+        self._replay_btn = Button(start_x + btn_w + gap, btn_y,
+                                  btn_w, BTN_HEIGHT, "Watch Replay",
                                   enabled=replay_filepath is not None)
+        has_subsystem = stats is not None and "subsystem_ms" in (stats or {})
+        self._debug_btn = Button(start_x + (btn_w + gap) * 2, btn_y,
+                                 btn_w, BTN_HEIGHT, "Debug",
+                                 enabled=has_subsystem)
 
         # Build order scroll state
         self._build_scroll: int = 0
@@ -177,6 +182,14 @@ class ResultsScreen(BaseScreen):
                 if self._replay_btn.handle_event(event):
                     return ScreenResult("replay_playback",
                                         data={"filepath": self._replay_filepath})
+                if self._debug_btn.handle_event(event):
+                    return ScreenResult("debug", data={
+                        "winner": self._winner,
+                        "human_teams": self._human_teams,
+                        "stats": self._stats,
+                        "replay_filepath": self._replay_filepath,
+                        "team_names": self._team_names,
+                    })
                 if self._has_stats:
                     if self._tabs.handle_event(event):
                         self._build_scroll = 0
@@ -201,6 +214,7 @@ class ResultsScreen(BaseScreen):
 
         self._btn.draw(self.screen)
         self._replay_btn.draw(self.screen)
+        self._debug_btn.draw(self.screen)
         pygame.display.flip()
 
     def _header_text(self) -> str:

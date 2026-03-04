@@ -95,6 +95,7 @@ class ReplayPlaybackScreen(BaseScreen):
     def __init__(self, screen: pygame.Surface, clock: pygame.time.Clock,
                  filepath: str):
         super().__init__(screen, clock)
+        self._filepath = filepath
         self._reader = ReplayReader(filepath)
 
         # Resolve team names from replay config
@@ -205,7 +206,16 @@ class ReplayPlaybackScreen(BaseScreen):
             overlay_h = TOP_BAR_HEIGHT + mh + BOTTOM_BAR_HEIGHT
             self._stat_graph = LineGraph(30, 115, mw - 60, overlay_h - 200,
                                          color1=GRAPH_LINE_T1, color2=GRAPH_LINE_T2)
-            self._stat_close_btn = Button(mw // 2 - 60, overlay_h - 45, 120, 30, "Close")
+            has_subsystem = "subsystem_ms" in (self._stats_data or {})
+            btn_w = 120
+            gap = 10
+            total_btns_w = btn_w * 2 + gap
+            btn_start_x = mw // 2 - total_btns_w // 2
+            self._stat_close_btn = Button(btn_start_x, overlay_h - 45,
+                                          btn_w, 30, "Close")
+            self._stat_debug_btn = Button(btn_start_x + btn_w + gap,
+                                          overlay_h - 45, btn_w, 30,
+                                          "Debug", enabled=has_subsystem)
             self._update_stat_graph()
 
         # Arrow buttons for single-stat mode
@@ -323,6 +333,11 @@ class ReplayPlaybackScreen(BaseScreen):
                     if self._stat_close_btn.handle_event(event):
                         self._show_score_screen = False
                         continue
+                    if self._stat_debug_btn.handle_event(event):
+                        return ScreenResult("replay_debug", data={
+                            "filepath": self._filepath,
+                            "stats": self._stats_data,
+                        })
                     if self._stat_tabs.handle_event(event):
                         self._build_scroll = 0
                         self._update_stat_graph()
@@ -804,6 +819,7 @@ class ReplayPlaybackScreen(BaseScreen):
             self._stat_graph.draw(self.screen)
 
         self._stat_close_btn.draw(self.screen)
+        self._stat_debug_btn.draw(self.screen)
         pygame.display.flip()
 
     def _draw_build_order_tab(self):

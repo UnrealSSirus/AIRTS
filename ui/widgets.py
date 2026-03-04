@@ -14,6 +14,7 @@ from ui.theme import (
     CB_BOX, CB_CHECK, CB_BORDER, CB_DISABLED,
     GRAPH_BG, GRAPH_GRID, GRAPH_AXIS_TEXT, GRAPH_LINE_T1, GRAPH_LINE_T2,
     GRAPH_TITLE_COLOR, GRAPH_FONT_SIZE,
+    DEBUG_LINE_COLORS,
 )
 
 _font_cache: dict[int, pygame.font.Font] = {}
@@ -791,3 +792,285 @@ class LineGraph:
             surface.blit(t1_s, (tip_x + 6, cy_tip))
             cy_tip += t1_s.get_height() + 2
             surface.blit(t2_s, (tip_x + 6, cy_tip))
+
+
+# ---------------------------------------------------------------------------
+# MultiLineGraph
+# ---------------------------------------------------------------------------
+
+class MultiLineGraph:
+    """Line graph supporting N named data series with legend and hover tooltip."""
+
+    def __init__(self, x: int, y: int, w: int, h: int, title: str = ""):
+        self.rect = pygame.Rect(x, y, w, h)
+        self.title = title
+        self._series: list[dict] = []  # {name, data, color, visible}
+        self._timestamps: list[int] = []
+        self._x_labels: list[str] = []
+        self._hover_index: int | None = None
+        self._hover_mouse_y: int = 0
+        self._legend_rects: list[pygame.Rect] = []  # hit areas per series
+
+    def set_series(self, series_list: list[dict],
+                   timestamps: list[int] | None = None):
+        """Set data series.
+
+        Each dict: {name: str, data: list[float], color: tuple, visible: bool}.
+        """
+        self._series = series_list
+        self._timestamps = timestamps or []
+        self._x_labels = []
+        for ts in self._timestamps:
+            secs = ts / 60.0
+            m, s = divmod(int(secs), 60)
+            self._x_labels.append(f"{m}:{s:02d}")
+
+    # -- layout helpers -------------------------------------------------------
+
+    _MARGIN_L = 50
+    _MARGIN_R = 130  # room for legend
+    _MARGIN_T_TITLE = 28
+    _MARGIN_T_NO_TITLE = 12
+
+    def _plot_area(self, font) -> tuple[int, int, int, int]:
+        margin_t = self._MARGIN_T_TITLE if self.title else self._MARGIN_T_NO_TITLE
+        margin_b = font.get_height() + 8
+        gx = self.rect.x + self._MARGIN_L
+        gy = self.rect.y + margin_t
+        gw = self.rect.w - self._MARGIN_L - self._MARGIN_R
+        gh = self.rect.h - margin_t - margin_b
+        return gx, gy, gw, gh
+
+    # -- event handling -------------------------------------------------------
+
+    def handle_event(self, event: pygame.event.Event) -> bool:
+        if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+            mx, my = event.pos
+            for i, lr in enumerate(self._legend_rects):
+                if lr.collidepoint(mx, my):
+                    self._series[i]["visible"] = not self._series[i]["visible"]
+                    return True
+
+        if event.type == pygame.MOUSEMOTION:
+            mx, my = event.pos
+            font = _get_font(GRAPH_FONT_SIZE)
+            gx, gy, gw, gh = self._plot_area(font)
+            n = self._data_len()
+            if gw > 0 and gh > 0 and n >= 2 and gx <= mx <= gx + gw and gy <= my <= gy + gh:
+                frac = (mx - gx) / gw
+                idx = round(frac * (n - 1))
+                idx = max(0, min(idx, n - 1))
+                old = self._hover_index
+                self._hover_index = idx
+                self._hover_mouse_y = my
+                return old != idx
+            else:
+                old = self._hover_index
+                self._hover_index = None
+                return old is not None
+        return False
+
+    def _data_len(self) -> int:
+        if not self._series:
+            return 0
+        return max((len(s["data"]) for s in self._series), default=0)
+
+    # -- y/x tick computation (reused from LineGraph logic) -------------------
+
+    def _compute_y_ticks(self, data_max: float) -> list[float]:
+        nice_steps = [0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500]
+        step = nice_steps[-1]
+        for s in nice_steps:
+            if data_max / s <= 6:
+                step = s
+                break
+        ticks = []
+        v = 0.0
+        top = data_max + step
+        while v <= top:
+            ticks.append(v)
+            v += step
+        return ticks
+
+    def _compute_x_ticks(self, n: int, gw: int, font) -> list[int]:
+        if not self._timestamps or len(self._timestamps) < 2:
+            count = min(6, n)
+            return [int(i * (n - 1) / max(count - 1, 1)) for i in range(count)]
+
+        max_tick = self._timestamps[-1]
+        game_seconds = max_tick / 60.0
+
+        interval_s = 30
+        while game_seconds / interval_s > 10:
+            interval_s *= 2
+
+        interval_ticks = interval_s * 60
+        min_px_gap = font.size("0:00")[0] + 12
+
+        indices: list[int] = []
+        prev_px = -min_px_gap * 2
+        t = 0
+        while t <= max_tick:
+            best_idx = 0
+            best_dist = abs(self._timestamps[0] - t)
+            for i, ts_val in enumerate(self._timestamps):
+                d = abs(ts_val - t)
+                if d < best_dist:
+                    best_dist = d
+                    best_idx = i
+            if best_idx < n:
+                px = int(best_idx * gw / (n - 1))
+                if px - prev_px >= min_px_gap or not indices:
+                    indices.append(best_idx)
+                    prev_px = px
+            t += interval_ticks
+        return indices
+
+    # -- drawing --------------------------------------------------------------
+
+    def draw(self, surface: pygame.Surface):
+        x, y, w, h = self.rect.x, self.rect.y, self.rect.w, self.rect.h
+        font = _get_font(GRAPH_FONT_SIZE)
+
+        # Background
+        pygame.draw.rect(surface, GRAPH_BG, self.rect, border_radius=4)
+        pygame.draw.rect(surface, GRAPH_GRID, self.rect, 1, border_radius=4)
+
+        # Title
+        if self.title:
+            title_font = _get_font(GRAPH_FONT_SIZE + 4)
+            ts = title_font.render(self.title, True, GRAPH_TITLE_COLOR)
+            surface.blit(ts, (x + (w - self._MARGIN_R) // 2 - ts.get_width() // 2, y + 4))
+
+        gx, gy, gw, gh = self._plot_area(font)
+        if gw <= 0 or gh <= 0:
+            return
+
+        n = self._data_len()
+        if n < 2:
+            no_data = font.render("No data", True, GRAPH_AXIS_TEXT)
+            surface.blit(no_data, (gx + gw // 2 - no_data.get_width() // 2,
+                                   gy + gh // 2 - no_data.get_height() // 2))
+            return
+
+        # Compute Y range from visible series
+        visible_vals = []
+        for s in self._series:
+            if s["visible"]:
+                visible_vals.extend(s["data"])
+        data_max = max(visible_vals) if visible_vals else 1.0
+        if data_max <= 0:
+            data_max = 1.0
+
+        y_ticks = self._compute_y_ticks(data_max)
+        y_max = y_ticks[-1] if y_ticks else data_max * 1.1
+
+        # Grid lines
+        for val in y_ticks:
+            frac = val / y_max if y_max > 0 else 0
+            ly = gy + gh - int(frac * gh)
+            pygame.draw.line(surface, GRAPH_GRID, (gx, ly), (gx + gw, ly), 1)
+            if val == int(val):
+                lbl = f"{int(val)}"
+            elif y_max >= 10:
+                lbl = f"{val:.0f}"
+            else:
+                lbl = f"{val:.1f}"
+            ls = font.render(lbl, True, GRAPH_AXIS_TEXT)
+            surface.blit(ls, (gx - ls.get_width() - 4, ly - ls.get_height() // 2))
+
+        # X-axis labels
+        x_tick_indices = self._compute_x_ticks(n, gw, font)
+        for idx in x_tick_indices:
+            lx = gx + int(idx * gw / (n - 1))
+            lbl = self._x_labels[idx] if idx < len(self._x_labels) else str(idx)
+            ls = font.render(lbl, True, GRAPH_AXIS_TEXT)
+            text_x = lx - ls.get_width() // 2
+            text_x = max(gx, min(text_x, gx + gw - ls.get_width()))
+            surface.blit(ls, (text_x, gy + gh + 4))
+
+        # Draw lines for visible series
+        def _val_to_y(v: float) -> int:
+            frac = v / y_max if y_max > 0 else 0
+            return gy + gh - int(frac * gh)
+
+        for s in self._series:
+            if not s["visible"] or len(s["data"]) < 2:
+                continue
+            pts = []
+            for i, v in enumerate(s["data"]):
+                px = gx + int(i * gw / (n - 1))
+                py = _val_to_y(v)
+                pts.append((px, py))
+            pygame.draw.lines(surface, s["color"], False, pts, 2)
+
+        # Legend (right side)
+        legend_x = gx + gw + 10
+        legend_y = gy
+        row_h = 16
+        legend_font = _get_font(GRAPH_FONT_SIZE - 2)
+        self._legend_rects = []
+        for i, s in enumerate(self._series):
+            ry = legend_y + i * row_h
+            color = s["color"] if s["visible"] else (70, 70, 80)
+            # Color swatch
+            swatch = pygame.Rect(legend_x, ry + 3, 10, 10)
+            pygame.draw.rect(surface, color, swatch)
+            # Label
+            name = s["name"]
+            if len(name) > 12:
+                name = name[:11] + ".."
+            lbl = legend_font.render(name, True, color)
+            surface.blit(lbl, (legend_x + 14, ry + 1))
+            # Hit rect for toggling
+            hit = pygame.Rect(legend_x, ry, self._MARGIN_R - 15, row_h)
+            self._legend_rects.append(hit)
+
+        # Hover tooltip
+        if self._hover_index is not None and n >= 2:
+            hi = self._hover_index
+            hx_pos = gx + int(hi * gw / (n - 1))
+
+            # Vertical line
+            line_surf = pygame.Surface((1, gh), pygame.SRCALPHA)
+            line_surf.fill((255, 255, 255, 80))
+            surface.blit(line_surf, (hx_pos, gy))
+
+            # Dots on visible lines
+            for s in self._series:
+                if s["visible"] and hi < len(s["data"]):
+                    pygame.draw.circle(surface, s["color"],
+                                       (hx_pos, _val_to_y(s["data"][hi])), 4)
+
+            # Tooltip box
+            tip_font = _get_font(GRAPH_FONT_SIZE)
+            time_str = self._x_labels[hi] if hi < len(self._x_labels) else str(hi)
+
+            lines_text = [time_str]
+            lines_colors = [(220, 220, 240)]
+            for s in self._series:
+                if s["visible"] and hi < len(s["data"]):
+                    val = s["data"][hi]
+                    lines_text.append(f"{s['name']}: {val:.2f}")
+                    lines_colors.append(s["color"])
+
+            rendered = [tip_font.render(t, True, c)
+                        for t, c in zip(lines_text, lines_colors)]
+            tip_w = max(r.get_width() for r in rendered) + 12
+            line_h = rendered[0].get_height()
+            tip_h = line_h * len(rendered) + 8
+
+            tip_x = hx_pos + 10
+            tip_y = self._hover_mouse_y - tip_h // 2
+            if tip_x + tip_w > gx + gw:
+                tip_x = hx_pos - tip_w - 10
+            tip_y = max(gy, min(tip_y, gy + gh - tip_h))
+
+            tip_rect = pygame.Rect(tip_x, tip_y, tip_w, tip_h)
+            pygame.draw.rect(surface, (20, 20, 32), tip_rect, border_radius=3)
+            pygame.draw.rect(surface, (80, 80, 110), tip_rect, 1, border_radius=3)
+
+            cy_tip = tip_y + 4
+            for r_surf in rendered:
+                surface.blit(r_surf, (tip_x + 6, cy_tip))
+                cy_tip += line_h
