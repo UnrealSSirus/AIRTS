@@ -1373,6 +1373,11 @@ class Game:
             ai = self.team_ai.get(team)
             team_names[team] = ai.ai_name if ai else self._player_name
 
+        log_path = self._stats.save_summary_log(
+            stats_data, self._winner, team_names=team_names,
+        )
+        print(f"[AIRTS] Game summary saved to {log_path}")
+
         result = {
             "winner": self._winner,
             "human_teams": self.human_teams,
