@@ -175,8 +175,7 @@ class Unit(CircleEntity, Damageable):
             self.attack_target = None
 
         if not self.is_building:
-            if self._tick % 5 == 0:
-                self._update_facing(dt * 5)
+            # Facing is now batched in game.py via batch_facing_update()
             self._update_follow()
             self._update_movement(dt)
             self._tick += 1

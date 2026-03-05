@@ -68,10 +68,11 @@ class CreateLobbyScreen(BaseScreen):
         self._sl_height = Slider(sl_x, 355, 220, "Map Height", 200, 1200, 600, 100)
         self._sl_obs_min = Slider(sl_x, 400, 220, "Obstacles Min", 0, 20, 4, 1)
         self._sl_obs_max = Slider(sl_x, 445, 220, "Obstacles Max", 0, 20, 8, 1)
+        self._sl_time_limit = Slider(sl_x, 490, 220, "Time Limit (min, 0=off)", 0, 60, 15, 1)
 
         # -- Headless checkbox ----------------------------------------------
         self._headless_cb = Checkbox(
-            sl_x, 490, "Headless (no rendering, max speed)",
+            sl_x, 535, "Headless (no rendering, max speed)",
             checked=False, enabled=False,
         )
 
@@ -155,6 +156,7 @@ class CreateLobbyScreen(BaseScreen):
                 self._sl_height.handle_event(event)
                 self._sl_obs_min.handle_event(event)
                 self._sl_obs_max.handle_event(event)
+                self._sl_time_limit.handle_event(event)
                 self._headless_cb.handle_event(event)
 
                 # Enforce obs_min <= obs_max
@@ -193,6 +195,7 @@ class CreateLobbyScreen(BaseScreen):
             "width": self._sl_width.value,
             "height": self._sl_height.value,
             "obstacle_count": (self._sl_obs_min.value, self._sl_obs_max.value),
+            "time_limit": self._sl_time_limit.value,
             "headless": self._headless_cb.checked,
         })
 
@@ -257,6 +260,9 @@ class CreateLobbyScreen(BaseScreen):
         self._sl_height.draw(self.screen)
         self._sl_obs_min.draw(self.screen)
         self._sl_obs_max.draw(self.screen)
+
+        self._sl_time_limit.draw(self.screen)
+
         self._headless_cb.draw(self.screen)
 
         # -- Start button ---------------------------------------------------

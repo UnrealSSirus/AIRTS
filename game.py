@@ -31,7 +31,7 @@ from entities.shapes import RectEntity, CircleEntity, PolygonEntity
 from systems.commands import GameCommand, CommandQueue
 from systems.replay import ReplayRecorder
 from systems.stats import GameStats
-from core.vectorized import build_obstacle_arrays, batch_obstacle_push, batch_unit_collisions
+from core.vectorized import build_obstacle_arrays, batch_obstacle_push, batch_unit_collisions, batch_facing_update
 from core.quadfield import QuadField
 from core.camera import Camera
 import numpy as np
@@ -661,12 +661,15 @@ class Game:
 
 
         # Collision detection + resolution via spatial queries
+        # Each mobile-mobile pair is resolved once (id check deduplicates).
         _t_tgt = _perf()
         _reuse_nearby: list = []
         for u in alive_units:
+            if u.is_building:
+                continue
             nearby = qf.get_units_exact(u.x, u.y, u.radius, out=_reuse_nearby)
             for other in nearby:
-                if other is u or other.is_building:
+                if other is u:
                     continue
                 dx = other.x - u.x
                 dy = other.y - u.y
@@ -677,15 +680,22 @@ class Game:
                     overlap = min_dist - dist
                     nx = dx / dist
                     ny = dy / dist
-                    if u.is_building:
-                        pass
-                    else:
-                        push = overlap if other.is_building else overlap * 0.5
-                        u.x -= nx * push
-                        u.y -= ny * push
+                    if other.is_building:
+                        u.x -= nx * overlap
+                        u.y -= ny * overlap
+                    elif id(u) < id(other):
+                        half = overlap * 0.5
+                        u.x -= nx * half
+                        u.y -= ny * half
+                        other.x += nx * half
+                        other.y += ny * half
         self._stats.record_subsystem("tgt_populate", (_perf() - _t_tgt) * 1000)
 
+        # Batch facing update (replaces per-unit _update_facing)
         _t = _perf()
+        facing_units = [u for u in alive_units if not u.is_building and u._tick % 5 == 0]
+        batch_facing_update(facing_units, dt * 5)
+
         for entity in self.entities:
             entity.update(dt)
         self._stats.record_subsystem("entity_update", (_perf() - _t) * 1000)

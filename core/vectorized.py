@@ -23,6 +23,73 @@ _FIRE_MODE_MAP = {
 }
 
 
+def batch_facing_update(units, dt_scaled: float) -> None:
+    """Vectorized facing-angle update for a batch of units.
+
+    *units* is a pre-filtered list of mobile units whose _tick % 5 == 0.
+    *dt_scaled* is dt * 5 (the accumulated time for the throttled update).
+
+    Units without a valid facing target are skipped.  All atan2 / angle-diff
+    math is done in numpy instead of per-unit Python.
+    """
+    if not units:
+        return
+
+    # Gather units that have a valid target to face
+    batch_idx: list[int] = []
+    ux_list: list[float] = []
+    uy_list: list[float] = []
+    tx_list: list[float] = []
+    ty_list: list[float] = []
+    fa_list: list[float] = []
+    tr_list: list[float] = []
+
+    for i, u in enumerate(units):
+        if u.weapon is not None and u.weapon.hits_only_friendly:
+            t = u.nearest_ally
+            if t is None or not getattr(t, 'alive', False):
+                continue
+        else:
+            t = u.nearest_enemy
+            if t is None or not getattr(t, 'alive', False):
+                continue
+        batch_idx.append(i)
+        ux_list.append(u.x)
+        uy_list.append(u.y)
+        tx_list.append(t.x)
+        ty_list.append(t.y)
+        fa_list.append(u.facing_angle)
+        tr_list.append(u.turn_rate)
+
+    n = len(batch_idx)
+    if n == 0:
+        return
+
+    ux_arr = np.array(ux_list, dtype=np.float64)
+    uy_arr = np.array(uy_list, dtype=np.float64)
+    tx_arr = np.array(tx_list, dtype=np.float64)
+    ty_arr = np.array(ty_list, dtype=np.float64)
+    facing = np.array(fa_list, dtype=np.float64)
+    turn_rates = np.array(tr_list, dtype=np.float64)
+
+    # Vectorized atan2 + angle_diff + clamped turn
+    desired = np.arctan2(ty_arr - uy_arr, tx_arr - ux_arr)
+    diff = (desired - facing) % math.tau
+    diff = np.where(diff > math.pi, diff - math.tau, diff)
+    max_turn = turn_rates * dt_scaled
+
+    new_facing = np.where(
+        np.abs(diff) <= max_turn,
+        desired,
+        facing + np.where(diff > 0, max_turn, -max_turn),
+    )
+    new_facing %= math.tau
+
+    # Write back
+    for k in range(n):
+        units[batch_idx[k]].facing_angle = float(new_facing[k])
+
+
 def build_unit_arrays(units) -> dict[str, np.ndarray]:
     """Extract unit data into contiguous numpy arrays (built once per step).
 
