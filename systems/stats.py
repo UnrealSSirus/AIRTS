@@ -45,10 +45,13 @@ class GameStats:
         # Per-subsystem timing breakdown (ms)
         self._subsystem_names = [
             "commands", "entity_update",
-            "ai_step", "capture", "targeting_build", "combat",
+            "ai_step", "capture",
+            "tgt_qf_sync", "tgt_nearest_enemy", "tgt_populate",
+            "combat",
             "spawn", "cleanup", "physics",
             "phys_array_build", "phys_unit_collisions",
             "phys_obstacle_push", "phys_writeback", "phys_clamp",
+            "bookkeeping",
         ]
         self._subsystem_bufs: dict[str, list[float]] = {n: [] for n in self._subsystem_names}
         self.ts_subsystems: dict[str, list[float]] = {n: [] for n in self._subsystem_names}

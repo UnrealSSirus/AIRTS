@@ -111,13 +111,15 @@ class Unit(CircleEntity, Damageable):
         self.selectable: bool = False
         self._facing_target: Entity | None = None   # entity ref, set by combat system
 
-        # -- targeting data (populated each tick by Game) -----------------------
+        # -- targeting data (populated every 15 ticks by Game) -------------------
         self.pos: tuple[float, float] = (x, y)      # snapshot used by distance matrix
-        self.nearest_enemies: list[Unit] = []        # sorted nearest-first
-        self.nearest_allies: list[Unit] = []         # sorted nearest-first, excludes self
-        self.enemies_in_range: list[Unit] = []       # nearest_enemies clipped to weapon range
-        self.allies_in_range: list[Unit] = []        # nearest_allies clipped to weapon range
-        self.nearby_units: list[Unit] = []           # all units within diameter distance (for collisions)
+        self.nearest_enemy: Unit | None = None       # vectorized nearest enemy
+        self.nearest_ally: Unit | None = None        # vectorized nearest ally
+
+        # -- quadfield cell tracking (managed by QuadField) ---------------------
+        self._quad_cells: list[int] = []
+        self._temp_num: int = 0
+        self._tick: int = 0
 
         # -- abilities ----------------------------------------------------------
         self.abilities: list = []
@@ -173,24 +175,25 @@ class Unit(CircleEntity, Damageable):
             self.attack_target = None
 
         if not self.is_building:
-            self._update_facing(dt)
+            if self._tick % 5 == 0:
+                self._update_facing(dt * 5)
             self._update_follow()
             self._update_movement(dt)
+            self._tick += 1
 
     def _update_facing(self, dt: float):
         # Priority: attack_target > cached nearest enemy/ally > movement target > hold
-        target_pos = None
-        if self.attack_target is not None and self.attack_target.alive:
-            target_pos = (self.attack_target.x, self.attack_target.y)
-        elif self._facing_target is not None and self._facing_target.alive:
-            target_pos = (self._facing_target.x, self._facing_target.y)
-        else:
-            # Fall back to movement target
-            if self.target is not None:
-                target_pos = self.target
 
-        if target_pos is None:
-            return
+        if self.weapon.hits_only_friendly:
+            if self.nearest_ally is not None and self.nearest_ally:
+                target_pos = (self.nearest_ally.x, self.nearest_ally.y)
+            else:
+                return
+        else:
+            if self.nearest_enemy is not None and self.nearest_enemy.alive:
+                target_pos = (self.nearest_enemy.x, self.nearest_enemy.y)
+            else:
+                return
 
         desired = math.atan2(target_pos[1] - self.y, target_pos[0] - self.x)
         diff = angle_diff(self.facing_angle, desired)
