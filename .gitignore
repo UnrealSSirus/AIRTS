@@ -25,3 +25,5 @@ replays/
 logs/
 CLAUDE.md
 ai_arena/arena_ratings.json
+Perigee/
+ais/perigee_ai.py
