@@ -18,6 +18,24 @@ python main.py
 
 Requires **Python 3.10+**, **Pygame 2.6+**, and **NumPy 2.4+**.
 
+### Optional: Cython acceleration
+
+Building the Cython extension speeds up unit collision resolution significantly.
+The game works without it (falls back to pure Python).
+
+```bash
+pip install cython
+
+# Windows (requires MSVC / "Desktop development with C++" in Visual Studio)
+python setup_cython.py build_ext --inplace
+
+# Linux (requires gcc / build-essential)
+python setup_cython.py build_ext --inplace
+
+# macOS (requires Xcode CLI tools: xcode-select --install)
+python setup_cython.py build_ext --inplace
+```
+
 ## Game Modes
 
 Configure the `team_ai` parameter when creating a game:
@@ -42,7 +60,10 @@ AIRTS/
 │   ├── settings.py             Tuning constants (HP, damage, colors, physics)
 │   └── unit_types.py           Data-driven unit type registry
 ├── core/
-│   └── helpers.py              Geometry helpers (LOS, hexagon points)
+│   ├── helpers.py              Geometry helpers (LOS, hexagon points)
+│   ├── quadfield.py            Uniform-grid spatial index for proximity queries
+│   ├── vectorized.py           Numpy-vectorized batch operations
+│   └── fast_collisions.pyx     Cython collision pass (optional, see below)
 ├── entities/
 │   ├── base.py                 Entity base class + Damageable mixin
 │   ├── shapes.py               Rect, Circle, Polygon, Sprite entities
