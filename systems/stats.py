@@ -1,5 +1,7 @@
 """Game statistics: running counters, time-series snapshots, and score calculation."""
 from __future__ import annotations
+import os
+from datetime import datetime
 from typing import Any
 
 from config.settings import CC_HP
@@ -45,10 +47,13 @@ class GameStats:
         # Per-subsystem timing breakdown (ms)
         self._subsystem_names = [
             "commands", "entity_update",
-            "ai_step", "capture", "targeting_build", "combat",
+            "ai_step", "capture",
+            "tgt_qf_sync", "tgt_nearest_enemy", "tgt_populate",
+            "combat",
             "spawn", "cleanup", "physics",
             "phys_array_build", "phys_unit_collisions",
             "phys_obstacle_push", "phys_writeback", "phys_clamp",
+            "bookkeeping",
         ]
         self._subsystem_bufs: dict[str, list[float]] = {n: [] for n in self._subsystem_names}
         self.ts_subsystems: dict[str, list[float]] = {n: [] for n in self._subsystem_names}
@@ -224,3 +229,98 @@ class GameStats:
             "step_ms": self.ts_step_ms,
             "subsystem_ms": {k: list(v) for k, v in self.ts_subsystems.items()},
         }
+
+    # -- post-game log --------------------------------------------------------
+
+    _LOG_DIR = "logs"
+
+    def save_summary_log(
+        self,
+        stats_data: dict[str, Any],
+        winner: int,
+        team_names: dict[int, str] | None = None,
+    ) -> str:
+        """Write a human-readable game summary + debug performance table to a log file.
+
+        Returns the filepath of the written log.
+        """
+        os.makedirs(self._LOG_DIR, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filepath = os.path.join(self._LOG_DIR, f"game_summary_{ts}.log")
+
+        lines: list[str] = []
+        lines.append("AIRTS — Post-Game Summary")
+        lines.append(f"Date: {datetime.now().isoformat(timespec='seconds')}")
+        lines.append("=" * 64)
+
+        # -- Match overview --
+        duration = stats_data.get("game_duration_seconds", 0)
+        m, s = divmod(int(duration), 60)
+        lines.append(f"\nMatch Duration : {m}m {s:02d}s  ({duration}s)")
+
+        if winner > 0:
+            winner_label = (team_names or {}).get(winner, f"Team {winner}")
+            lines.append(f"Winner        : {winner_label}  (Team {winner})")
+        elif winner == -1:
+            lines.append("Winner        : Draw")
+        else:
+            lines.append("Winner        : Undecided")
+
+        # -- Per-team stats --
+        final = stats_data.get("final", {})
+        for team_id in sorted(final, key=int):
+            tf = final[team_id]
+            name = (team_names or {}).get(int(team_id), f"Team {team_id}")
+            lines.append(f"\n--- {name}  (Team {team_id}) ---")
+            lines.append(f"  Score              : {tf.get('score', 0)}")
+            lines.append(f"  Units Spawned      : {tf.get('units_spawned', 0)}")
+            lines.append(f"  Units Killed       : {tf.get('units_killed', 0)}")
+            lines.append(f"  Units Lost         : {tf.get('units_lost', 0)}")
+            lines.append(f"  Damage Dealt       : {tf.get('damage_dealt', 0)}")
+            lines.append(f"  Damage Taken       : {tf.get('damage_taken', 0)}")
+            lines.append(f"  Healing Done       : {tf.get('healing_done', 0)}")
+            lines.append(f"  Metal Spots Captured: {tf.get('metal_spots_captured', 0)}")
+            lines.append(f"  Actions            : {tf.get('actions', 0)}")
+
+            build_order = tf.get("build_order", [])
+            if build_order:
+                lines.append(f"  Build Order ({len(build_order)} units):")
+                for entry in build_order[:30]:
+                    tick = entry.get("tick", 0)
+                    ut = entry.get("unit_type", "?")
+                    bo_sec = round(tick / 60.0, 1)
+                    lines.append(f"    {bo_sec:>7.1f}s  {ut}")
+                if len(build_order) > 30:
+                    lines.append(f"    ... and {len(build_order) - 30} more")
+
+        # -- Performance / debug table (mirrors the debug screen) --
+        step_ms = stats_data.get("step_ms", [])
+        subsystem_ms = stats_data.get("subsystem_ms", {})
+
+        lines.append(f"\n{'=' * 64}")
+        lines.append("Performance Debug  (subsystem timings in ms)")
+        lines.append(f"{'=' * 64}")
+        lines.append(f"{'Subsystem':<24s} {'Min':>9s} {'Avg':>9s} {'Max':>9s} {'Samples':>8s}")
+        lines.append("-" * 64)
+
+        all_series = [("step_ms", step_ms)]
+        for name in self._subsystem_names:
+            all_series.append((name, subsystem_ms.get(name, [])))
+
+        for name, data in all_series:
+            if data:
+                mn = min(data)
+                avg = sum(data) / len(data)
+                mx = max(data)
+                n = len(data)
+            else:
+                mn = avg = mx = 0.0
+                n = 0
+            lines.append(f"{name:<24s} {mn:>8.3f}  {avg:>8.3f}  {mx:>8.3f}  {n:>7d}")
+
+        lines.append("")
+
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+
+        return filepath

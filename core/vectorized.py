@@ -23,6 +23,75 @@ _FIRE_MODE_MAP = {
 }
 
 
+def batch_facing_update(units, dt_scaled: float) -> None:
+    """Vectorized facing-angle update for a batch of units.
+
+    *units* is a pre-filtered list of mobile units whose _tick % 5 == 0.
+    *dt_scaled* is dt * 5 (the accumulated time for the throttled update).
+
+    Units without a valid facing target are skipped.  All atan2 / angle-diff
+    math is done in numpy instead of per-unit Python.
+    """
+    if not units:
+        return
+
+    # Gather units that have a valid target to face
+    batch_idx: list[int] = []
+    ux_list: list[float] = []
+    uy_list: list[float] = []
+    tx_list: list[float] = []
+    ty_list: list[float] = []
+    fa_list: list[float] = []
+    tr_list: list[float] = []
+
+    for i, u in enumerate(units):
+        if u.weapon is not None and u.weapon.hits_only_friendly:
+            t = u.nearest_ally
+            if t is None or not getattr(t, 'alive', False):
+                continue
+            if t.hp >= t.max_hp:
+                continue
+        else:
+            t = u.nearest_enemy
+            if t is None or not getattr(t, 'alive', False):
+                continue
+        batch_idx.append(i)
+        ux_list.append(u.x)
+        uy_list.append(u.y)
+        tx_list.append(t.x)
+        ty_list.append(t.y)
+        fa_list.append(u.facing_angle)
+        tr_list.append(u.turn_rate)
+
+    n = len(batch_idx)
+    if n == 0:
+        return
+
+    ux_arr = np.array(ux_list, dtype=np.float64)
+    uy_arr = np.array(uy_list, dtype=np.float64)
+    tx_arr = np.array(tx_list, dtype=np.float64)
+    ty_arr = np.array(ty_list, dtype=np.float64)
+    facing = np.array(fa_list, dtype=np.float64)
+    turn_rates = np.array(tr_list, dtype=np.float64)
+
+    # Vectorized atan2 + angle_diff + clamped turn
+    desired = np.arctan2(ty_arr - uy_arr, tx_arr - ux_arr)
+    diff = (desired - facing) % math.tau
+    diff = np.where(diff > math.pi, diff - math.tau, diff)
+    max_turn = turn_rates * dt_scaled
+
+    new_facing = np.where(
+        np.abs(diff) <= max_turn,
+        desired,
+        facing + np.where(diff > 0, max_turn, -max_turn),
+    )
+    new_facing %= math.tau
+
+    # Write back
+    for k in range(n):
+        units[batch_idx[k]].facing_angle = float(new_facing[k])
+
+
 def build_unit_arrays(units) -> dict[str, np.ndarray]:
     """Extract unit data into contiguous numpy arrays (built once per step).
 
@@ -118,71 +187,6 @@ def build_obstacle_arrays(circle_obs, rect_obs):
         rect_arr = np.empty((0, 4), dtype=np.float64)
 
     return circle_arr, rect_arr
-
-
-# ---------------------------------------------------------------------------
-# Batch facing targets
-# ---------------------------------------------------------------------------
-
-def batch_facing_targets(arrays: dict) -> np.ndarray:
-    """For each unit find closest relevant target within LOS.
-
-    Returns float64[N, 2] of target (x, y) positions; NaN = no target.
-    """
-    n = len(arrays["x"])
-    result = np.full((n, 2), np.nan, dtype=np.float64)
-    if n == 0:
-        return result
-
-    x = arrays["x"]
-    y = arrays["y"]
-    team = arrays["team"]
-    alive = arrays["alive"]
-    hp = arrays["hp"]
-    max_hp = arrays["max_hp"]
-    los = arrays["los"]
-    is_healer = arrays["is_healer"]
-
-    # N×N distance matrix
-    dx = x[:, None] - x[None, :]  # (N, N)
-    dy = y[:, None] - y[None, :]  # (N, N)
-    dist_sq = dx * dx + dy * dy
-
-    los_sq = los * los  # (N,)
-
-    # Base validity: target alive, not self, within LOS
-    valid = alive[None, :].repeat(n, axis=0)  # (N, N) - target alive
-    np.fill_diagonal(valid, False)  # not self
-    valid &= dist_sq <= los_sq[:, None]  # within LOS range
-
-    # Split: healers want hurt allies, attackers want enemies
-    healer_mask = is_healer[:, None]  # (N, 1)
-
-    # For healers: same team AND hurt
-    same_team = team[:, None] == team[None, :]
-    hurt = hp[None, :] < max_hp[None, :]
-    healer_valid = valid & healer_mask & same_team & hurt
-
-    # For attackers: different team
-    diff_team = ~same_team
-    attacker_valid = valid & ~healer_mask & diff_team
-
-    combined_valid = healer_valid | attacker_valid
-
-    # Mask invalid entries with inf
-    dist_masked = np.where(combined_valid, dist_sq, np.inf)
-
-    # Find closest valid target per unit
-    best_idx = np.argmin(dist_masked, axis=1)
-
-    # Check that the best is actually valid (not inf)
-    has_target = dist_masked[np.arange(n), best_idx] < np.inf
-
-    result[has_target, 0] = x[best_idx[has_target]]
-    result[has_target, 1] = y[best_idx[has_target]]
-
-    return result
-
 
 # ---------------------------------------------------------------------------
 # Batch LOS checks
@@ -597,15 +601,24 @@ def batch_unit_collisions(positions: np.ndarray, radii: np.ndarray,
             ny_v = dy / dist
             overlap_amount = min_d - dist
 
+            overlap_amount *= 0.4
+
             i_bld = is_building[pi]
             j_bld = is_building[pj]
             share_i = np.where(i_bld, 0.0, np.where(j_bld, 1.0, 0.5))
             share_j = np.where(j_bld, 0.0, np.where(i_bld, 1.0, 0.5))
 
-            np.add.at(pos[:, 0], pi, -nx_v * overlap_amount * share_i)
-            np.add.at(pos[:, 1], pi, -ny_v * overlap_amount * share_i)
-            np.add.at(pos[:, 0], pj, nx_v * overlap_amount * share_j)
-            np.add.at(pos[:, 1], pj, ny_v * overlap_amount * share_j)
+            collision_count = np.ones(n, dtype=np.float64)
+            np.add.at(collision_count, pi, 1)
+            np.add.at(collision_count, pj, 1)
+
+            scale_i = share_i / collision_count[pi]
+            scale_j = share_j / collision_count[pj]
+
+            np.add.at(pos[:, 0], pi, -nx_v * overlap_amount * scale_i)
+            np.add.at(pos[:, 1], pi, -ny_v * overlap_amount * scale_i)
+            np.add.at(pos[:, 0], pj, nx_v * overlap_amount * scale_j)
+            np.add.at(pos[:, 1], pj, ny_v * overlap_amount * scale_j)
 
         return pos
 
@@ -685,14 +698,23 @@ def batch_unit_collisions(positions: np.ndarray, radii: np.ndarray,
         ny_v = dy / dist
         overlap_amount = min_d - dist
 
+        overlap_amount *= 0.4
+
         i_bld = is_building[pi]
         j_bld = is_building[pj]
         share_i = np.where(i_bld, 0.0, np.where(j_bld, 1.0, 0.5))
         share_j = np.where(j_bld, 0.0, np.where(i_bld, 1.0, 0.5))
 
-        np.add.at(pos[:, 0], pi, -nx_v * overlap_amount * share_i)
-        np.add.at(pos[:, 1], pi, -ny_v * overlap_amount * share_i)
-        np.add.at(pos[:, 0], pj, nx_v * overlap_amount * share_j)
-        np.add.at(pos[:, 1], pj, ny_v * overlap_amount * share_j)
+        collision_count = np.ones(n, dtype=np.float64)
+        np.add.at(collision_count, pi, 1)
+        np.add.at(collision_count, pj, 1)
+
+        scale_i = share_i / collision_count[pi]
+        scale_j = share_j / collision_count[pj]
+
+        np.add.at(pos[:, 0], pi, -nx_v * overlap_amount * scale_i)
+        np.add.at(pos[:, 1], pi, -ny_v * overlap_amount * scale_i)
+        np.add.at(pos[:, 0], pj, nx_v * overlap_amount * scale_j)
+        np.add.at(pos[:, 1], pj, ny_v * overlap_amount * scale_j)
 
     return pos

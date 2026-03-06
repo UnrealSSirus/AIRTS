@@ -111,6 +111,8 @@ DEBUG_LINE_COLORS = [
     (180, 100, 255),   # ai_step — purple
     (255, 165, 60),    # capture — orange
     (80, 160, 255),    # targeting_build — blue
+    (100, 140, 220),   # tgt_qf_sync — steel blue
+    (130, 190, 255),   # tgt_populate — light cornflower
     (80, 220, 220),    # combat — cyan
     (255, 130, 180),   # spawn — pink
     (255, 255, 140),   # cleanup — pale yellow
