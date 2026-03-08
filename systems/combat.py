@@ -2,7 +2,7 @@
 from __future__ import annotations
 import math
 from dataclasses import dataclass, field
-import numpy as np
+from typing import TYPE_CHECKING
 from entities.base import Entity
 from entities.shapes import CircleEntity, RectEntity
 from entities.unit import Unit, HOLD_FIRE, TARGET_FIRE, FREE_FIRE
@@ -12,21 +12,8 @@ from entities.laser import LaserFlash
 from core.helpers import line_intersects_circle, line_intersects_rect, angle_diff
 import config.audio as audio
 
-
-@dataclass
-class TargetingData:
-    alive_t1: list[Unit]
-    alive_t2: list[Unit]
-    t1_sorted_enemy_idx: np.ndarray      # (N1, N2) sorted indices into alive_t2
-    t1_sorted_enemy_dist_sq: np.ndarray  # (N1, N2) sorted squared distances
-    t2_sorted_enemy_idx: np.ndarray      # (N2, N1) sorted indices into alive_t1
-    t2_sorted_enemy_dist_sq: np.ndarray
-    t1_sorted_ally_idx: np.ndarray       # (N1, N1) for healers
-    t1_sorted_ally_dist_sq: np.ndarray
-    t2_sorted_ally_idx: np.ndarray
-    t2_sorted_ally_dist_sq: np.ndarray
-    t1_index: dict[int, int]  # id(unit) -> index in alive_t1
-    t2_index: dict[int, int]  # id(unit) -> index in alive_t2
+if TYPE_CHECKING:
+    from core.quadfield import QuadField
 
 
 @dataclass
@@ -57,140 +44,48 @@ def _in_fov(unit: Unit, tx: float, ty: float) -> bool:
     return abs(angle_diff(unit.facing_angle, to_target)) <= unit.fov / 2
 
 
-def _pick_unit_target(
-    a: Unit,
-    ax: float, ay: float,
-    a_range: float,
-    circle_obs, rect_obs,
-) -> Entity | None:
-    """Select a target respecting the unit's fire_mode and attack_target.
-
-    Uses pre-clipped enemies_in_range list on the unit.
-    """
-    if a.fire_mode == HOLD_FIRE:
-        return None
-
-    preferred = a.attack_target
-    if preferred is not None and not preferred.alive:
-        a.attack_target = None
-        preferred = None
-
-    if a.fire_mode == TARGET_FIRE:
-        if preferred is None:
-            return None
-        d = math.hypot(preferred.x - ax, preferred.y - ay)
-        if d <= a_range and _in_fov(a, preferred.x, preferred.y) and _has_los(ax, ay, preferred.x, preferred.y, circle_obs, rect_obs):
-            return preferred
-        return None
-
-    # FREE_FIRE: prefer attack_target, else closest enemy
-    if preferred is not None:
-        d = math.hypot(preferred.x - ax, preferred.y - ay)
-        if d <= a_range and _in_fov(a, preferred.x, preferred.y) and _has_los(ax, ay, preferred.x, preferred.y, circle_obs, rect_obs):
-            return preferred
-
-    # Walk pre-clipped enemies_in_range (already sorted nearest-first, within weapon range)
-    for b in a.enemies_in_range:
-        if not b.alive:
-            continue
-        if not _in_fov(a, b.x, b.y):
-            continue
-        if _has_los(ax, ay, b.x, b.y, circle_obs, rect_obs):
-            return b
-    return None
-
-
-def _pick_friendly_target(
-    a: Unit, ax: float, ay: float,
-    circle_obs, rect_obs,
-) -> Unit | None:
-    """Pick closest friendly unit that needs healing within range + LOS.
-
-    Uses pre-clipped allies_in_range list on the unit.
-    """
-    for u in a.allies_in_range:
-        if not u.alive:
-            continue
-        if isinstance(u, CommandCenter):
-            continue
-        if u.hp >= u.max_hp:
-            continue
-        if not _in_fov(a, u.x, u.y):
-            continue
-        if _has_los(ax, ay, u.x, u.y, circle_obs, rect_obs):
-            return u
-    return None
-
-
 def _find_rotation_target(
     a: Unit,
     ax: float, ay: float,
-    targeting: TargetingData,
+    quadfield: QuadField,
     circle_obs, rect_obs,
 ) -> Entity | None:
     """Find nearest enemy/ally within LOS range for facing, even outside weapon range."""
-    los_sq = a.line_of_sight * a.line_of_sight
+    los = a.line_of_sight
     healer = a.weapon is not None and a.weapon.hits_only_friendly
 
     if healer:
-        # Look for wounded allies
-        if a.team == 1:
-            my_idx = targeting.t1_index.get(id(a))
-            if my_idx is None:
-                return None
-            sorted_idx = targeting.t1_sorted_ally_idx
-            sorted_dsq = targeting.t1_sorted_ally_dist_sq
-            search_list = targeting.alive_t1
-        else:
-            my_idx = targeting.t2_index.get(id(a))
-            if my_idx is None:
-                return None
-            sorted_idx = targeting.t2_sorted_ally_idx
-            sorted_dsq = targeting.t2_sorted_ally_dist_sq
-            search_list = targeting.alive_t2
-        if sorted_idx.size == 0:
-            return None
-        row_idx = sorted_idx[my_idx]
-        row_dsq = sorted_dsq[my_idx]
-        for j in range(len(row_idx)):
-            d_sq = row_dsq[j]
-            if d_sq > los_sq:
-                break
-            u = search_list[row_idx[j]]
-            if not u.alive or u.hp >= u.max_hp:
+        # Look for wounded allies within LOS
+        allies = quadfield.get_team_units_exact(ax, ay, los, a.team)
+        best = None
+        best_dsq = float("inf")
+        for u in allies:
+            if u is a:
+                continue
+            if u.hp >= u.max_hp:
                 continue
             if isinstance(u, CommandCenter):
                 continue
-            return u
+            dx = u.x - ax
+            dy = u.y - ay
+            dsq = dx * dx + dy * dy
+            if dsq < best_dsq:
+                best_dsq = dsq
+                best = u
+        return best
     else:
-        # Look for enemies
-        if a.team == 1:
-            my_idx = targeting.t1_index.get(id(a))
-            if my_idx is None:
-                return None
-            sorted_idx = targeting.t1_sorted_enemy_idx
-            sorted_dsq = targeting.t1_sorted_enemy_dist_sq
-            search_list = targeting.alive_t2
-        else:
-            my_idx = targeting.t2_index.get(id(a))
-            if my_idx is None:
-                return None
-            sorted_idx = targeting.t2_sorted_enemy_idx
-            sorted_dsq = targeting.t2_sorted_enemy_dist_sq
-            search_list = targeting.alive_t1
-        if sorted_idx.size == 0:
-            return None
-        row = sorted_idx[my_idx]
-        row_d = sorted_dsq[my_idx]
-        for j in range(len(row)):
-            d_sq = row_d[j]
-            if d_sq > los_sq:
-                break
-            b = search_list[row[j]]
-            if not b.alive:
-                continue
-            return b
-    return None
+        # Look for nearest enemy within LOS
+        enemies = quadfield.get_enemy_units_exact(ax, ay, los, a.team)
+        best = None
+        best_dsq = float("inf")
+        for b in enemies:
+            dx = b.x - ax
+            dy = b.y - ay
+            dsq = dx * dx + dy * dy
+            if dsq < best_dsq:
+                best_dsq = dsq
+                best = b
+        return best
 
 
 def combat_step(
@@ -198,7 +93,7 @@ def combat_step(
     obstacles: list[Entity],
     laser_flashes: list[LaserFlash],
     dt: float,
-    targeting: TargetingData | None = None,
+    quadfield: QuadField | None = None,
     stats=None,
     circle_obs=None,
     rect_obs=None,
@@ -217,9 +112,7 @@ def combat_step(
             for obs in obstacles if isinstance(obs, RectEntity)
         )
 
-    combatants = [u for u in units if u.alive]
-
-    for a in combatants:
+    for a in units:
         if not a.alive:
             continue
         if not a.can_attack:
@@ -237,12 +130,41 @@ def combat_step(
         best_target = None
 
         if a.laser_cooldown <= 0:
-            if wpn.hits_only_friendly:
-                if a.allies_in_range:
-                    best_target = _pick_friendly_target(a, ax, ay, circle_obs, rect_obs)
+            if a.fire_mode == HOLD_FIRE:
+                pass
+            elif wpn.hits_only_friendly:
+                # Healer: check nearest_ally for range, damage, FOV, LOS
+                ally = a.nearest_ally
+                if ally is not None and ally.alive and not isinstance(ally, CommandCenter):
+                    if ally.hp < ally.max_hp:
+                        d = math.hypot(ally.x - ax, ally.y - ay)
+                        if d <= a_range and _in_fov(a, ally.x, ally.y) and _has_los(ax, ay, ally.x, ally.y, circle_obs, rect_obs):
+                            best_target = ally
             else:
-                if a.enemies_in_range:
-                    best_target = _pick_unit_target(a, ax, ay, a_range, circle_obs, rect_obs)
+                # Attacker: honour attack_target first, then nearest_enemy
+                preferred = a.attack_target
+                if preferred is not None and not preferred.alive:
+                    a.attack_target = None
+                    preferred = None
+
+                if a.fire_mode == TARGET_FIRE:
+                    if preferred is not None:
+                        d = math.hypot(preferred.x - ax, preferred.y - ay)
+                        if d <= a_range and _in_fov(a, preferred.x, preferred.y) and _has_los(ax, ay, preferred.x, preferred.y, circle_obs, rect_obs):
+                            best_target = preferred
+                else:
+                    # FREE_FIRE: prefer manual target, fall back to nearest_enemy
+                    if preferred is not None:
+                        d = math.hypot(preferred.x - ax, preferred.y - ay)
+                        if d <= a_range and _in_fov(a, preferred.x, preferred.y) and _has_los(ax, ay, preferred.x, preferred.y, circle_obs, rect_obs):
+                            best_target = preferred
+
+                    if best_target is None:
+                        enemy = a.nearest_enemy
+                        if enemy is not None and enemy.alive:
+                            d = math.hypot(enemy.x - ax, enemy.y - ay)
+                            if d <= a_range and _in_fov(a, enemy.x, enemy.y) and _has_los(ax, ay, enemy.x, enemy.y, circle_obs, rect_obs):
+                                best_target = enemy
 
         if best_target is not None:
             if a_dmg < 0:
@@ -290,10 +212,8 @@ def combat_step(
                     team=a.team,
                 ))
         else:
-            # No shot — find a rotation target for facing
-            if targeting and not a.is_building:
-                if a.attack_target is None or not a.attack_target.alive:
-                    a._facing_target = _find_rotation_target(a, ax, ay, targeting, circle_obs, rect_obs)
+            if a.nearest_enemy is not None:
+                a._facing_target = a.nearest_enemy
 
     # -- process pending chains ----------------------------------------------
     if pending_chains is not None:
@@ -312,11 +232,11 @@ def combat_step(
             best_dist_sq = float("inf")
             cr_sq = chain.weapon.chain_range ** 2
 
-            # Brute-force: iterate enemy team list
-            if targeting:
-                enemies = targeting.alive_t2 if chain.team == 1 else targeting.alive_t1
+            # Use quadfield for spatial query, fall back to brute-force
+            if quadfield is not None:
+                enemies = quadfield.get_enemy_units_exact(ox, oy, chain.weapon.chain_range, chain.team)
             else:
-                enemies = combatants
+                enemies = units
             for b in enemies:
                 if not b.alive or b.entity_id in chain.hit_set:
                     continue

@@ -10,7 +10,7 @@ from entities.base import Entity
 from entities.unit import Unit
 from entities.command_center import CommandCenter
 from entities.laser import LaserFlash
-from systems.combat import combat_step, PendingChain, TargetingData
+from systems.combat import combat_step, PendingChain
 from systems.physics import clamp_units_to_bounds
 from systems.spawning import spawn_step
 from systems.selection import click_select, apply_circle_selection, select_all_of_type
@@ -31,14 +31,38 @@ from entities.shapes import RectEntity, CircleEntity, PolygonEntity
 from systems.commands import GameCommand, CommandQueue
 from systems.replay import ReplayRecorder
 from systems.stats import GameStats
-from core.vectorized import build_obstacle_arrays, batch_obstacle_push, batch_unit_collisions
+from core.vectorized import build_obstacle_arrays, batch_obstacle_push, batch_unit_collisions, batch_facing_update
+from core.quadfield import QuadField
 from core.camera import Camera
 import numpy as np
+
+try:
+    from core.fast_collisions import collision_pass as _cy_collision_pass
+    _HAS_CYTHON = True
+except ImportError:
+    _HAS_CYTHON = False
+
 import os
 from ui.widgets import Slider, Button
 import gui
 
 _DBLCLICK_MS = 400
+
+# -- metallic border colours (outer highlight → inner shadow) ----------
+_BORDER_OUTER = (160, 165, 175)
+_BORDER_MID = (100, 105, 115)
+_BORDER_INNER = (60, 62, 70)
+
+
+def _draw_metallic_border(surface: pygame.Surface, rect: pygame.Rect,
+                          thickness: int = 3) -> None:
+    """Draw a bevelled metallic border around *rect*."""
+    colors = [_BORDER_OUTER, _BORDER_MID, _BORDER_INNER]
+    for i in range(min(thickness, len(colors))):
+        c = colors[i]
+        r = rect.inflate(-i * 2, -i * 2)
+        if r.w > 0 and r.h > 0:
+            pygame.draw.rect(surface, c, r, 1)
 
 # Type registry for deserialization dispatch
 _ENTITY_TYPES: dict[str, type] = {
@@ -68,8 +92,11 @@ class Game:
         headless: bool = False,
         max_ticks: int = 0,
         save_replay: bool = True,
+        save_debug_summary: bool = False,
         step_timeout_ms: float = 0,
         replay_output_dir: str = "replays",
+        screen_width: int | None = None,
+        screen_height: int | None = None,
     ):
         """
         *team_ai* maps team numbers to AI controllers.  Teams **not** present
@@ -94,14 +121,30 @@ class Game:
             self.screen = screen
             self._owns_pygame = False
 
+        # Map dimensions (world)
         self.width = width
         self.height = height
+
+        # Screen dimensions (display) — defaults to map dims for backward compat
+        self._screen_width = screen_width if screen_width is not None else width
+        self._screen_height = screen_height if screen_height is not None else height
+
+        # Layout areas
+        self._header_h = 40
+        self._hud_h = int(self._screen_height * 0.20)
+        self._header_rect = pygame.Rect(0, 0, self._screen_width, self._header_h)
+        self._hud_rect = pygame.Rect(0, self._screen_height - self._hud_h,
+                                     self._screen_width, self._hud_h)
+        self._game_area = pygame.Rect(0, self._header_h, self._screen_width,
+                                      self._screen_height - self._header_h - self._hud_h)
+
         self.clock = clock or pygame.time.Clock()
         self.running = False
         self.fps = 60
         self._headless = headless
         self._max_ticks = max_ticks
         self._save_replay = save_replay
+        self._save_debug_summary = save_debug_summary
         self._step_timeout_ms = step_timeout_ms
         self._replay_output_dir = replay_output_dir
         self._player_name = player_name
@@ -138,6 +181,10 @@ class Game:
         ]
         self._precompute_obstacles()
 
+        # -- spatial index for fast proximity queries --------------------------
+        self._quadfield = QuadField(width, height, cell_size=10)
+        self._quadfield.rebuild(self.units)
+
         self._next_entity_id: int = 1
         self._speed_multiplier: float = 1.0
         self._accumulator: float = 0.0
@@ -170,15 +217,16 @@ class Game:
         self._last_click_time: int = 0
         self._last_click_pos: tuple[int, int] = (0, 0)
 
-        self._speed_slider = Slider(width - 170, 10, 150, "Speed %", 25, 800, 100, 25)
-        self._pause_btn = Button(width - 210, 12, 32, 24, "||", icon="pause")
+        self._speed_slider = Slider(self._screen_width - 170, 10, 150, "Speed %", 25, 800, 100, 25)
+        self._pause_btn = Button(self._screen_width - 210, 12, 32, 24, "||", icon="pause")
+        self._reset_cam_btn = Button(70, 12, 50, 24, "Reset", font_size=18)
         self._paused = False
         self._pause_font = pygame.font.SysFont(None, 48)
         self._mouse_grabbed = False
 
         # -- camera & world surface -------------------------------------------
         self._world_surface = pygame.Surface((width, height))
-        self._camera = Camera(width, height, width, height,
+        self._camera = Camera(self._game_area.w, self._game_area.h, width, height,
                               max_zoom=CAMERA_MAX_ZOOM)
         self._mid_dragging = False
         self._mid_last: tuple[int, int] = (0, 0)
@@ -401,19 +449,22 @@ class Game:
         pygame.event.set_grab(grab)
 
     def _update_edge_pan(self, dt: float):
-        """Pan camera when mouse is at the screen edge (only while grabbed)."""
+        """Pan camera when mouse is at the game area edge (only while grabbed)."""
         if not self._mouse_grabbed:
             return
         mx, my = pygame.mouse.get_pos()
+        ga = self._game_area
+        if not ga.collidepoint(mx, my):
+            return
         dx = 0.0
         dy = 0.0
-        if mx <= EDGE_PAN_MARGIN:
+        if mx <= ga.left + EDGE_PAN_MARGIN:
             dx = EDGE_PAN_SPEED * dt
-        elif mx >= self.width - EDGE_PAN_MARGIN - 1:
+        elif mx >= ga.right - EDGE_PAN_MARGIN - 1:
             dx = -EDGE_PAN_SPEED * dt
-        if my <= EDGE_PAN_MARGIN:
+        if my <= ga.top + EDGE_PAN_MARGIN:
             dy = EDGE_PAN_SPEED * dt
-        elif my >= self.height - EDGE_PAN_MARGIN - 1:
+        elif my >= ga.bottom - EDGE_PAN_MARGIN - 1:
             dy = -EDGE_PAN_SPEED * dt
         if dx or dy:
             self._camera.pan(dx, dy)
@@ -422,7 +473,10 @@ class Game:
 
     def _screen_to_world(self, pos: tuple[int, int]) -> tuple[float, float]:
         """Convert a screen position to world coordinates via the camera."""
-        return self._camera.screen_to_world(float(pos[0]), float(pos[1]))
+        return self._camera.screen_to_world(
+            float(pos[0] - self._game_area.x),
+            float(pos[1] - self._game_area.y),
+        )
 
     # -- events -------------------------------------------------------------
 
@@ -446,6 +500,10 @@ class Game:
             if self._speed_slider.handle_event(event):
                 self._speed_multiplier = self._speed_slider.value / 100.0
 
+            if self._reset_cam_btn.handle_event(event):
+                self._camera.reset()
+                continue
+
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     if self._paused:
@@ -458,15 +516,19 @@ class Game:
             # Scroll wheel zoom (available always, not just for human)
             if event.type == pygame.MOUSEWHEEL:
                 mx, my = pygame.mouse.get_pos()
-                if event.y > 0:
-                    self._camera.zoom_at(mx, my, CAMERA_ZOOM_STEP)
-                elif event.y < 0:
-                    self._camera.zoom_at(mx, my, 1.0 / CAMERA_ZOOM_STEP)
+                if self._game_area.collidepoint(mx, my):
+                    vx = mx - self._game_area.x
+                    vy = my - self._game_area.y
+                    if event.y > 0:
+                        self._camera.zoom_at(vx, vy, CAMERA_ZOOM_STEP)
+                    elif event.y < 0:
+                        self._camera.zoom_at(vx, vy, 1.0 / CAMERA_ZOOM_STEP)
 
             # Middle mouse pan
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 2:
-                self._mid_dragging = True
-                self._mid_last = event.pos
+                if self._game_area.collidepoint(event.pos):
+                    self._mid_dragging = True
+                    self._mid_last = event.pos
             elif event.type == pygame.MOUSEBUTTONUP and event.button == 2:
                 self._mid_dragging = False
             elif event.type == pygame.MOUSEMOTION and self._mid_dragging:
@@ -479,20 +541,17 @@ class Game:
                 continue
 
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                # GUI click stays in screen space
-                gui_result = gui.handle_gui_click(
-                    self.entities, event.pos[0], event.pos[1],
-                    self.width, self.height,
-                )
-                if gui_result is not None:
-                    cc = gui.get_selected_cc(self.entities)
-                    if cc is not None:
-                        self._command_queue.enqueue(GameCommand(
-                            type="set_spawn_type",
-                            team=cc.team,
-                            tick=self._iteration,
-                            data={"team": cc.team, "unit_type": gui_result},
-                        ))
+                # HUD click — consume all clicks in the HUD area
+                if self._hud_rect.collidepoint(event.pos):
+                    hud_result = gui.handle_hud_click(
+                        self.entities, event.pos[0], event.pos[1],
+                        self._screen_width, self._screen_height, self._hud_h,
+                    )
+                    if hud_result is not None:
+                        self._handle_hud_action(hud_result)
+                    continue
+                # Only start drag if click is in game area
+                if not self._game_area.collidepoint(event.pos):
                     continue
                 # Drag start: store in world coords
                 wx, wy = self._screen_to_world(event.pos)
@@ -544,6 +603,8 @@ class Game:
                 self._dragging = False
 
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
+                if not self._game_area.collidepoint(event.pos):
+                    continue
                 wx, wy = self._screen_to_world(event.pos)
                 self._rdragging = True
                 self._rpath = [(wx, wy)]
@@ -590,6 +651,30 @@ class Game:
                 if isinstance(e, CommandCenter) and e.team == data["team"]:
                     e.spawn_type = data["unit_type"]
 
+    def _handle_hud_action(self, result: dict):
+        """Process an action dict returned by gui.handle_hud_click."""
+        action = result["action"]
+        if action == "set_spawn_type":
+            cc = gui.get_selected_cc(self.entities)
+            if cc is not None:
+                self._command_queue.enqueue(GameCommand(
+                    type="set_spawn_type",
+                    team=cc.team,
+                    tick=self._iteration,
+                    data={"team": cc.team, "unit_type": result["unit_type"]},
+                ))
+        elif action == "stop":
+            selected = [e for e in self.entities
+                        if isinstance(e, Unit) and e.selected and not e.is_building]
+            if selected:
+                team = selected[0].team
+                self._command_queue.enqueue(GameCommand(
+                    type="stop",
+                    team=team,
+                    tick=self._iteration,
+                    data={"unit_ids": [u.entity_id for u in selected]},
+                ))
+
     # -- step ---------------------------------------------------------------
 
     def step(self, dt: float):
@@ -604,123 +689,97 @@ class Game:
         self._refresh_steer_obstacles()
         self._stats.record_subsystem("commands", (_perf() - _t) * 1000)
 
-        # Build distance matrices for targeting
+        # -- QuadField-based targeting build ------------------------------------
+        qf = self._quadfield
+        alive_units = [u for u in self.units if u.alive]
+
+        # Sync quadfield with current positions (early-outs when cell unchanged)
+        _t_tgt = _perf()
+        for u in alive_units:
+            qf.moved_unit(u)
+        self._stats.record_subsystem("tgt_qf_sync", (_perf() - _t_tgt) * 1000)
+
+        _t_tgt = _perf()
+        # Vectorized nearest-enemy and nearest-ally calculation every 15 ticks
+        if self._iteration % 15 == 0 and alive_units:
+            positions = np.array([[u.x, u.y] for u in alive_units], dtype=np.float64)
+            teams = np.array([u.team for u in alive_units], dtype=np.int8)
+
+            for team_id in np.unique(teams):
+                team_mask = teams == team_id
+                enemy_mask = ~team_mask
+
+                team_indices = np.where(team_mask)[0]
+                enemy_indices = np.where(enemy_mask)[0]
+
+                team_pos = positions[team_mask]      # (N, 2)
+
+                # Nearest enemy
+                if len(enemy_indices) > 0:
+                    enemy_pos = positions[enemy_mask]     # (M, 2)
+                    diffs = team_pos[:, np.newaxis, :] - enemy_pos[np.newaxis, :, :]  # (N, M, 2)
+                    dists_sq = np.sum(diffs ** 2, axis=2)                              # (N, M)
+                    nearest_enemy_idx = np.argmin(dists_sq, axis=1)                    # (N,)
+
+                    enemy_units = [alive_units[j] for j in enemy_indices]
+                    for i, ti in enumerate(team_indices):
+                        alive_units[ti].nearest_enemy = enemy_units[nearest_enemy_idx[i]]
+
+                # Nearest ally (excluding self via inf on the diagonal)
+                n_team = len(team_indices)
+                if n_team > 1:
+                    ally_diffs = team_pos[:, np.newaxis, :] - team_pos[np.newaxis, :, :]  # (N, N, 2)
+                    ally_dists_sq = np.sum(ally_diffs ** 2, axis=2)                        # (N, N)
+                    np.fill_diagonal(ally_dists_sq, np.inf)
+                    nearest_ally_idx = np.argmin(ally_dists_sq, axis=1)                    # (N,)
+
+                    ally_units = [alive_units[j] for j in team_indices]
+                    for i, ti in enumerate(team_indices):
+                        alive_units[ti].nearest_ally = ally_units[nearest_ally_idx[i]]
+        self._stats.record_subsystem("tgt_nearest_enemy", (_perf() - _t_tgt) * 1000)
+
+
+
+        # Collision detection + resolution
+        _t_tgt = _perf()
+        if _HAS_CYTHON:
+            # Cython fast path: spatial hash + resolution entirely in C
+            _cy_collision_pass(alive_units)
+        else:
+            # Pure Python fallback via QuadField queries
+            _reuse_nearby: list = []
+            for u in alive_units:
+                if u.is_building:
+                    continue
+                nearby = qf.get_units_exact(u.x, u.y, u.radius, out=_reuse_nearby)
+                for other in nearby:
+                    if other is u:
+                        continue
+                    dx = other.x - u.x
+                    dy = other.y - u.y
+                    dist_sq = dx * dx + dy * dy
+                    min_dist = u.radius + other.radius
+                    if dist_sq < min_dist * min_dist:
+                        dist = math.sqrt(max(dist_sq, 1e-24))
+                        overlap = min_dist - dist
+                        nx = dx / dist
+                        ny = dy / dist
+                        if other.is_building:
+                            u.x -= nx * overlap
+                            u.y -= ny * overlap
+                        elif id(u) < id(other):
+                            half = overlap * 0.5
+                            u.x -= nx * half
+                            u.y -= ny * half
+                            other.x += nx * half
+                            other.y += ny * half
+        self._stats.record_subsystem("tgt_populate", (_perf() - _t_tgt) * 1000)
+
+        # Batch facing update (replaces per-unit _update_facing)
         _t = _perf()
-        alive_t1 = [u for u in self.team_1_units if u.alive]
-        alive_t2 = [u for u in self.team_2_units if u.alive]
-        n1, n2 = len(alive_t1), len(alive_t2)
+        facing_units = [u for u in alive_units if not u.is_building and u._tick % 5 == 0]
+        batch_facing_update(facing_units, dt * 5)
 
-        t1_index = {id(u): i for i, u in enumerate(alive_t1)}
-        t2_index = {id(u): i for i, u in enumerate(alive_t2)}
-
-        # Empty arrays for degenerate cases
-        _empty_0 = np.empty((0, 0), dtype=np.float64)
-        _empty_idx = np.empty((0, 0), dtype=np.intp)
-
-        t1_pos = np.array([(u.x, u.y) for u in alive_t1], dtype=np.float64).reshape(n1, 2) if n1 > 0 else np.empty((0, 2), dtype=np.float64)
-        t2_pos = np.array([(u.x, u.y) for u in alive_t2], dtype=np.float64).reshape(n2, 2) if n2 > 0 else np.empty((0, 2), dtype=np.float64)
-
-        if n1 > 0 and n2 > 0:
-            diff = t1_pos[:, None, :] - t2_pos[None, :, :]  # (N1, N2, 2)
-            enemy_dist_sq = np.sum(diff * diff, axis=2)       # (N1, N2)
-            t1_sorted_enemy_idx = np.argsort(enemy_dist_sq, axis=1)
-            t1_sorted_enemy_dist_sq = np.take_along_axis(enemy_dist_sq, t1_sorted_enemy_idx, axis=1)
-            enemy_dist_sq_T = enemy_dist_sq.T.copy()          # (N2, N1)
-            t2_sorted_enemy_idx = np.argsort(enemy_dist_sq_T, axis=1)
-            t2_sorted_enemy_dist_sq = np.take_along_axis(enemy_dist_sq_T, t2_sorted_enemy_idx, axis=1)
-        else:
-            t1_sorted_enemy_idx = _empty_idx
-            t1_sorted_enemy_dist_sq = _empty_0
-            t2_sorted_enemy_idx = _empty_idx
-            t2_sorted_enemy_dist_sq = _empty_0
-
-        # Ally matrices (within-team, for healers)
-        if n1 > 1:
-            diff1 = t1_pos[:, None, :] - t1_pos[None, :, :]
-            ally1_dist_sq = np.sum(diff1 * diff1, axis=2)
-            np.fill_diagonal(ally1_dist_sq, np.inf)
-            t1_sorted_ally_idx = np.argsort(ally1_dist_sq, axis=1)
-            t1_sorted_ally_dist_sq = np.take_along_axis(ally1_dist_sq, t1_sorted_ally_idx, axis=1)
-        else:
-            t1_sorted_ally_idx = _empty_idx
-            t1_sorted_ally_dist_sq = _empty_0
-
-        if n2 > 1:
-            diff2 = t2_pos[:, None, :] - t2_pos[None, :, :]
-            ally2_dist_sq = np.sum(diff2 * diff2, axis=2)
-            np.fill_diagonal(ally2_dist_sq, np.inf)
-            t2_sorted_ally_idx = np.argsort(ally2_dist_sq, axis=1)
-            t2_sorted_ally_dist_sq = np.take_along_axis(ally2_dist_sq, t2_sorted_ally_idx, axis=1)
-        else:
-            t2_sorted_ally_idx = _empty_idx
-            t2_sorted_ally_dist_sq = _empty_0
-
-        targeting = TargetingData(
-            alive_t1=alive_t1, alive_t2=alive_t2,
-            t1_sorted_enemy_idx=t1_sorted_enemy_idx,
-            t1_sorted_enemy_dist_sq=t1_sorted_enemy_dist_sq,
-            t2_sorted_enemy_idx=t2_sorted_enemy_idx,
-            t2_sorted_enemy_dist_sq=t2_sorted_enemy_dist_sq,
-            t1_sorted_ally_idx=t1_sorted_ally_idx,
-            t1_sorted_ally_dist_sq=t1_sorted_ally_dist_sq,
-            t2_sorted_ally_idx=t2_sorted_ally_idx,
-            t2_sorted_ally_dist_sq=t2_sorted_ally_dist_sq,
-            t1_index=t1_index, t2_index=t2_index,
-        )
-
-        # Populate per-unit targeting lists and collision neighbor lists
-        for i, u in enumerate(alive_t1):
-            diam_sq = u.diameter_sq
-            rng_sq = u.attack_range_sq
-            if n2 > 0:
-                enemy_dsq = t1_sorted_enemy_dist_sq[i]
-                enemy_idx = t1_sorted_enemy_idx[i]
-                u.nearest_enemies = [alive_t2[j] for j in enemy_idx]
-                u.enemies_in_range = u.nearest_enemies[:int(np.searchsorted(enemy_dsq, rng_sq, side='right'))]
-                nearby_enemies = u.nearest_enemies[:int(np.searchsorted(enemy_dsq, diam_sq, side='right'))]
-            else:
-                u.nearest_enemies = []
-                u.enemies_in_range = []
-                nearby_enemies = []
-            if n1 > 1:
-                ally_dsq = t1_sorted_ally_dist_sq[i]
-                ally_idx = t1_sorted_ally_idx[i]
-                u.nearest_allies = [alive_t1[j] for j in ally_idx]
-                u.allies_in_range = u.nearest_allies[:int(np.searchsorted(ally_dsq, rng_sq, side='right'))]
-                nearby_allies = u.nearest_allies[:int(np.searchsorted(ally_dsq, diam_sq, side='right'))]
-            else:
-                u.nearest_allies = []
-                u.allies_in_range = []
-                nearby_allies = []
-            u.nearby_units = nearby_enemies + nearby_allies
-        for i, u in enumerate(alive_t2):
-            diam_sq = u.diameter_sq
-            rng_sq = u.attack_range_sq
-            if n1 > 0:
-                enemy_dsq = t2_sorted_enemy_dist_sq[i]
-                enemy_idx = t2_sorted_enemy_idx[i]
-                u.nearest_enemies = [alive_t1[j] for j in enemy_idx]
-                u.enemies_in_range = u.nearest_enemies[:int(np.searchsorted(enemy_dsq, rng_sq, side='right'))]
-                nearby_enemies = u.nearest_enemies[:int(np.searchsorted(enemy_dsq, diam_sq, side='right'))]
-            else:
-                u.nearest_enemies = []
-                u.enemies_in_range = []
-                nearby_enemies = []
-            if n2 > 1:
-                ally_dsq = t2_sorted_ally_dist_sq[i]
-                ally_idx = t2_sorted_ally_idx[i]
-                u.nearest_allies = [alive_t2[j] for j in ally_idx]
-                u.allies_in_range = u.nearest_allies[:int(np.searchsorted(ally_dsq, rng_sq, side='right'))]
-                nearby_allies = u.nearest_allies[:int(np.searchsorted(ally_dsq, diam_sq, side='right'))]
-            else:
-                u.nearest_allies = []
-                u.allies_in_range = []
-                nearby_allies = []
-            u.nearby_units = nearby_enemies + nearby_allies
-
-        self._stats.record_subsystem("targeting_build", (_perf() - _t) * 1000)
-
-        _t = _perf()
         for entity in self.entities:
             entity.update(dt)
         self._stats.record_subsystem("entity_update", (_perf() - _t) * 1000)
@@ -743,20 +802,22 @@ class Game:
         # Capture — track new entities so extractors join units + team lists
         entity_count_before_capture = len(self.entities)
         _t = _perf()
-        capture_step(self.entities, self.command_centers, self.units, self.metal_spots, metal_extractors, dt, stats=self._stats)
-        self._stats.record_subsystem("capture", (_perf() - _t) * 1000)
+        capture_step(self.entities, self.command_centers, self.units, self.metal_spots, metal_extractors, dt, stats=self._stats, grid=self._quadfield)
 
         if len(self.entities) > entity_count_before_capture:
             for e in self.entities[entity_count_before_capture:]:
                 if isinstance(e, Unit):
                     self.units.append(e)
+                    self._quadfield.add_unit(e)
                     if e.team == 1:
                         self.team_1_units.append(e)
                     elif e.team == 2:
                         self.team_2_units.append(e)
+        self._stats.record_subsystem("capture", (_perf() - _t) * 1000)
 
         _t = _perf()
-        combat_step(self.units, obstacles, self.laser_flashes, dt, targeting=targeting,
+        combat_step(alive_units, obstacles, self.laser_flashes, dt,
+                    quadfield=self._quadfield,
                     circle_obs=self._obs_circle, rect_obs=self._obs_rect,
                     sounds=None if self._headless else self._sounds,
                     pending_chains=self._pending_chains, stats=self._stats)
@@ -766,25 +827,34 @@ class Game:
         entity_count_before_spawn = len(self.entities)
         _t = _perf()
         spawn_step(self.entities, self.command_centers, self.human_teams, stats=self._stats, tick=self._iteration, units=self.units)
-        self._stats.record_subsystem("spawn", (_perf() - _t) * 1000)
 
         if len(self.entities) > entity_count_before_spawn:
             self._physics_cooldown = 60  # 1 second to settle after spawn
             for e in self.entities[entity_count_before_spawn:]:
                 if isinstance(e, Unit):
+                    self._quadfield.add_unit(e)
                     if e.team == 1:
                         self.team_1_units.append(e)
                     elif e.team == 2:
                         self.team_2_units.append(e)
+        self._stats.record_subsystem("spawn", (_perf() - _t) * 1000)
 
         _t = _perf()
-        self.entities = [e for e in self.entities if e.alive]
-        self.units = [u for u in self.units if u.alive]
-        self.team_1_units = [u for u in self.team_1_units if u.alive]
-        self.team_2_units = [u for u in self.team_2_units if u.alive]
-        self.command_centers = [c for c in self.command_centers if c.alive]
-        self.metal_extractors = [m for m in self.metal_extractors if m.alive]
+        # Always assign IDs (cheap — skips entities that already have one)
         self._assign_entity_ids()
+        # Remove dead units from quadfield; only rebuild lists if something died
+        _had_deaths = False
+        for u in self.units:
+            if not u.alive:
+                self._quadfield.remove_unit(u)
+                _had_deaths = True
+        if _had_deaths:
+            self.entities = [e for e in self.entities if e.alive]
+            self.units = [u for u in self.units if u.alive]
+            self.team_1_units = [u for u in self.team_1_units if u.alive]
+            self.team_2_units = [u for u in self.team_2_units if u.alive]
+            self.command_centers = [c for c in self.command_centers if c.alive]
+            self.metal_extractors = [m for m in self.metal_extractors if m.alive]
         self._stats.record_subsystem("cleanup", (_perf() - _t) * 1000)
 
         # Physics cooldown: detect movement to keep physics running
@@ -803,7 +873,7 @@ class Game:
         if self._physics_cooldown > 0:
             self._physics_cooldown -= 1
 
-            # Vectorized unit-unit collision + obstacle push
+            # Obstacle push (unit-unit collision already resolved above)
             if units:
                 _tp = _perf()
                 all_positions = np.column_stack([
@@ -812,30 +882,8 @@ class Game:
                 ])
                 all_radii = np.array([u.radius for u in units], dtype=np.float64)
                 all_is_bld = np.array([u.is_building for u in units], dtype=bool)
-
-                # Build collision pairs from nearby_units (diameter-clipped)
-                uid_to_idx = {id(u): i for i, u in enumerate(units)}
-                _pairs_i: list[int] = []
-                _pairs_j: list[int] = []
-                for u in units:
-                    ui = uid_to_idx[id(u)]
-                    for nb in u.nearby_units:
-                        nj = uid_to_idx.get(id(nb))
-                        if nj is not None and ui < nj:
-                            _pairs_i.append(ui)
-                            _pairs_j.append(nj)
-                if _pairs_i:
-                    col_pi = np.array(_pairs_i, dtype=np.int64)
-                    col_pj = np.array(_pairs_j, dtype=np.int64)
-                else:
-                    col_pi = None
-                    col_pj = None
                 self._stats.record_subsystem("phys_array_build", (_perf() - _tp) * 1000)
-
-                _tp = _perf()
-                all_positions = batch_unit_collisions(all_positions, all_radii, all_is_bld,
-                                                     pair_i=col_pi, pair_j=col_pj)
-                self._stats.record_subsystem("phys_unit_collisions", (_perf() - _tp) * 1000)
+                self._stats.record_subsystem("phys_unit_collisions", 0.0)
 
                 # Obstacle push on mobile units only
                 _tp = _perf()
@@ -873,6 +921,7 @@ class Game:
             self._stats.record_subsystem("phys_clamp", 0.0)
         self._stats.record_subsystem("physics", (_perf() - _t) * 1000)
 
+        _t = _perf()
         self.laser_flashes = [lf for lf in self.laser_flashes if lf.update(dt)]
         self._iteration += 1
 
@@ -908,6 +957,7 @@ class Game:
             self._winner = -1
             self._phase = "explode"
             self._anim_timer = 0.0
+        self._stats.record_subsystem("bookkeeping", (_perf() - _t) * 1000)
 
         _elapsed_ms = (time.perf_counter() - _t0) * 1000.0
         self._stats.record_step_time(_elapsed_ms)
@@ -982,6 +1032,7 @@ class Game:
         self.command_centers = [e for e in self.entities if isinstance(e, CommandCenter)]
         self.metal_extractors = [e for e in self.entities if isinstance(e, MetalExtractor)]
         self._precompute_obstacles()
+        self._quadfield.rebuild(self.units)
         self.laser_flashes = [LaserFlash.from_dict(lfd) for lfd in data["laser_flashes"]]
         for lf, lfd in zip(self.laser_flashes, data["laser_flashes"]):
             sid = lfd.get("source_id")
@@ -1080,30 +1131,58 @@ class Game:
                 for px, py in preview:
                     pygame.draw.circle(ws, COMMAND_DOT_COLOR, (int(px), int(py)), 4, 1)
 
-        # Project world surface to screen via camera
+        # -- Composite to screen --
         self.screen.fill((0, 0, 0))
-        self._camera.apply(ws, self.screen)
 
-        # GUI stays in screen space
-        if self._has_human:
-            gui.draw_cc_gui(self.screen, self.entities, self.width, self.height)
+        # Header bar
+        pygame.draw.rect(self.screen, (20, 20, 30), self._header_rect)
+        pygame.draw.line(self.screen, (40, 40, 55),
+                         (0, self._header_h - 1),
+                         (self._screen_width, self._header_h - 1))
 
+        # Header widgets
         self._pause_btn.draw(self.screen)
+        self._reset_cam_btn.draw(self.screen)
         self._speed_slider.draw(self.screen)
-
-        # FPS counter
         fps_val = self.clock.get_fps()
         fps_surf = self._fps_font.render(f"FPS: {fps_val:.0f}", True, (200, 200, 200))
-        self.screen.blit(fps_surf, (4, 4))
+        self.screen.blit(fps_surf, (4, 12))
 
-        # Paused overlay
+        # Game area: black dead-space background then camera projection
+        ga = self._game_area
+        pygame.draw.rect(self.screen, (0, 0, 0), ga)
+        self._camera.apply(ws, self.screen, dest=(ga.x, ga.y))
+
+        # Metallic border around the world edge (rendered in screen space)
+        bx0, by0 = self._camera.world_to_screen(0, 0)
+        bx1, by1 = self._camera.world_to_screen(self.width, self.height)
+        border_rect = pygame.Rect(
+            int(bx0) + ga.x, int(by0) + ga.y,
+            int(bx1 - bx0), int(by1 - by0),
+        )
+        # Clip border drawing to the game area
+        clip_save = self.screen.get_clip()
+        self.screen.set_clip(ga)
+        _draw_metallic_border(self.screen, border_rect, 3)
+        self.screen.set_clip(clip_save)
+
+        # HUD area
+        pygame.draw.rect(self.screen, (20, 20, 30), self._hud_rect)
+        pygame.draw.line(self.screen, (40, 40, 55),
+                         (0, self._hud_rect.top),
+                         (self._screen_width, self._hud_rect.top))
+        if self._has_human:
+            gui.draw_hud(self.screen, self.entities,
+                         self._screen_width, self._screen_height, self._hud_h)
+
+        # Paused overlay (centered on game area)
         if self._paused:
             pause_surf = self._pause_font.render("PAUSED", True, (220, 220, 240))
             hint_surf = self._fps_font.render("ESC again to quit", True, (140, 140, 160))
-            px = self.width // 2 - pause_surf.get_width() // 2
-            py = self.height // 2 - pause_surf.get_height() // 2 - 10
+            px = ga.centerx - pause_surf.get_width() // 2
+            py = ga.centery - pause_surf.get_height() // 2 - 10
             self.screen.blit(pause_surf, (px, py))
-            hx = self.width // 2 - hint_surf.get_width() // 2
+            hx = ga.centerx - hint_surf.get_width() // 2
             self.screen.blit(hint_surf, (hx, py + pause_surf.get_height() + 4))
 
         pygame.display.flip()
@@ -1354,11 +1433,11 @@ class Game:
                 m, s = divmod(int(game_secs), 60)
                 timer_str = f"Headless  —  {m}:{s:02d}  (tick {self._iteration})"
                 timer_surf = headless_font.render(timer_str, True, (160, 160, 180))
-                tx = self.width // 2 - timer_surf.get_width() // 2
-                ty = self.height // 2 - timer_surf.get_height() // 2 - self._SNAP_H // 2 - 20
+                tx = self._screen_width // 2 - timer_surf.get_width() // 2
+                ty = self._screen_height // 2 - timer_surf.get_height() // 2 - self._SNAP_H // 2 - 20
                 self.screen.blit(timer_surf, (tx, ty))
                 if self._headless_snap_surf is not None:
-                    snap_x = self.width // 2 - self._SNAP_W // 2
+                    snap_x = self._screen_width // 2 - self._SNAP_W // 2
                     snap_y = ty + timer_surf.get_height() + self._SNAP_PAD
                     self.screen.blit(self._headless_snap_surf, (snap_x, snap_y))
                 pygame.display.flip()
@@ -1419,6 +1498,12 @@ class Game:
         for team in [1, 2]:
             ai = self.team_ai.get(team)
             team_names[team] = ai.ai_name if ai else self._player_name
+
+        if self._save_debug_summary:
+            log_path = self._stats.save_summary_log(
+                stats_data, self._winner, team_names=team_names,
+            )
+            print(f"[AIRTS] Game summary saved to {log_path}")
 
         result = {
             "winner": self._winner,

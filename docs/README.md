@@ -36,6 +36,19 @@ python main.py
 - `pygame >= 2.6.0`
 - `numpy >= 2.4.2`
 
+### Optional: Cython acceleration
+
+Building the Cython extension speeds up unit collision resolution significantly.
+The game works without it (falls back to pure Python).
+
+```bash
+pip install cython
+python setup_cython.py build_ext --inplace
+```
+
+Requires a C compiler: MSVC on Windows ("Desktop development with C++" workload),
+`gcc`/`build-essential` on Linux, or Xcode CLI tools on macOS.
+
 ## Game Modes
 
 Configure the `team_ai` parameter in `main.py` to set up different game modes:

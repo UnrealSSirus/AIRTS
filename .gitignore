@@ -14,6 +14,9 @@ build/
 .ruff_cache/
 *.so
 *.dll
+*.pyd
+# Cython-generated C files (built from .pyx sources)
+core/*.c
 .env
 .idea/
 .vscode/
@@ -27,3 +30,5 @@ CLAUDE.md
 ai_arena/arena_ratings.json
 Perigee/
 ais/perigee_ai.py
+*.pyd
+lobby_settings.json
