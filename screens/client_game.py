@@ -19,14 +19,38 @@ from config.settings import (
     TEAM1_COLOR, TEAM2_COLOR,
     CAMERA_ZOOM_STEP, CAMERA_MAX_ZOOM,
     EDGE_PAN_MARGIN, EDGE_PAN_SPEED,
+    GUI_BORDER, GUI_BTN_SELECTED, GUI_BTN_HOVER, GUI_BTN_NORMAL,
+    GUI_TEXT_COLOR,
 )
 from core.camera import Camera
-from config.unit_types import UNIT_TYPES
+from config.unit_types import UNIT_TYPES, get_spawnable_types
 from ui.widgets import _get_font
 
-_TOP_BAR_H = 40
 _STATUS_COLOR = (180, 180, 200)
 _DISCONNECT_COLOR = (255, 100, 100)
+
+# HUD constants (matching gui.py style)
+_SECTION_BG = (22, 22, 30)
+_TITLE_COLOR = (210, 210, 230)
+_STAT_LABEL = (130, 130, 155)
+_DIVIDER = (50, 50, 65)
+_BUILD_BTN_SIZE = 38
+_BUILD_BTN_GAP = 4
+
+# Metallic border colours (matching game.py)
+_BORDER_OUTER = (160, 165, 175)
+_BORDER_MID = (100, 105, 115)
+_BORDER_INNER = (60, 62, 70)
+
+
+def _draw_metallic_border(surface: pygame.Surface, rect: pygame.Rect,
+                          thickness: int = 3) -> None:
+    colors = [_BORDER_OUTER, _BORDER_MID, _BORDER_INNER]
+    for i in range(min(thickness, len(colors))):
+        c = colors[i]
+        r = rect.inflate(-i * 2, -i * 2)
+        if r.w > 0 and r.h > 0:
+            pygame.draw.rect(surface, c, r, 1)
 
 
 class ClientGameScreen(BaseScreen):
@@ -44,12 +68,19 @@ class ClientGameScreen(BaseScreen):
         mw = client.map_width
         mh = client.map_height
 
-        # Game area layout
-        self._game_area = pygame.Rect(0, _TOP_BAR_H, self.width,
-                                      self.height - _TOP_BAR_H)
+        # Layout areas — match host's header/hud/game area proportions
+        self._header_h = 40
+        self._hud_h = int(self.height * 0.20)
+        self._header_rect = pygame.Rect(0, 0, self.width, self._header_h)
+        self._hud_rect = pygame.Rect(0, self.height - self._hud_h,
+                                     self.width, self._hud_h)
+        self._game_area = pygame.Rect(0, self._header_h, self.width,
+                                      self.height - self._header_h - self._hud_h)
 
         # World surface and camera
         self._world_surface = pygame.Surface((mw, mh))
+        self._map_w = mw
+        self._map_h = mh
         self._camera = Camera(self._game_area.w, self._game_area.h, mw, mh,
                               max_zoom=CAMERA_MAX_ZOOM)
 
@@ -85,6 +116,27 @@ class ClientGameScreen(BaseScreen):
 
         # Disconnect tracking
         self._disconnect_timer: float = 0.0
+
+        # HUD build button rects (cached)
+        self._build_btns = self._compute_build_btn_rects()
+
+    def _compute_build_btn_rects(self) -> list[tuple[pygame.Rect, str]]:
+        """Compute spawn-type button rects inside the action panel area of the HUD."""
+        # Action panel is rightmost 20% of HUD
+        action_w = max(220, int(self.width * 0.20))
+        ar = pygame.Rect(self.width - action_w, self.height - self._hud_h,
+                         action_w, self._hud_h)
+        types = list(get_spawnable_types().keys())
+        pad, hdr = 8, 22
+        iw = ar.width - pad * 2
+        cols = max(1, (iw + _BUILD_BTN_GAP) // (_BUILD_BTN_SIZE + _BUILD_BTN_GAP))
+        out: list[tuple[pygame.Rect, str]] = []
+        for i, ut in enumerate(types):
+            c, r = i % cols, i // cols
+            bx = ar.left + pad + c * (_BUILD_BTN_SIZE + _BUILD_BTN_GAP)
+            by = ar.top + pad + hdr + r * (_BUILD_BTN_SIZE + _BUILD_BTN_GAP)
+            out.append((pygame.Rect(bx, by, _BUILD_BTN_SIZE, _BUILD_BTN_SIZE), ut))
+        return out
 
     def run(self) -> ScreenResult:
         while True:
@@ -148,8 +200,11 @@ class ClientGameScreen(BaseScreen):
                     self._camera.pan(dx, dy)
                     self._mid_last = event.pos
 
-                # Left click — selection
+                # Left click — HUD or selection
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    if self._hud_rect.collidepoint(event.pos):
+                        self._handle_hud_click(event.pos)
+                        continue
                     if self._game_area.collidepoint(event.pos):
                         self._dragging = True
                         self._drag_start = event.pos
@@ -252,6 +307,29 @@ class ClientGameScreen(BaseScreen):
                     eid = ent.get("id")
                     if eid is not None:
                         self._selected_ids.add(eid)
+
+    # -- HUD interaction ----------------------------------------------------
+
+    def _get_selected_cc(self) -> dict | None:
+        for ent in self._entities:
+            if ent.get("t") == "CC" and ent.get("id") in self._selected_ids:
+                return ent
+        return None
+
+    def _handle_hud_click(self, pos: tuple[int, int]) -> None:
+        cc = self._get_selected_cc()
+        if cc is None or cc.get("tm") != self._my_team:
+            return
+        mx, my = pos
+        for br, ut in self._build_btns:
+            if br.collidepoint(mx, my):
+                self._client.send_command(GameCommand(
+                    type="set_spawn_type",
+                    team=self._my_team,
+                    tick=self._tick,
+                    data={"team": self._my_team, "unit_type": ut},
+                ))
+                return
 
     # -- commands -----------------------------------------------------------
 
@@ -445,32 +523,65 @@ class ClientGameScreen(BaseScreen):
                 bx, by = self._rpath[i]
                 pygame.draw.line(ws, (0, 200, 60), (ax, ay), (bx, by), 1)
 
-        # Fog of war — only show own team's vision
+        # Fog of war
         self._draw_fog(entities)
 
-        # Composite to screen
+        # -- Composite to screen --
         self.screen.fill((0, 0, 0))
 
-        # Top bar
-        self.screen.fill((20, 20, 30), (0, 0, self.width, _TOP_BAR_H))
+        # Header bar
+        pygame.draw.rect(self.screen, (20, 20, 30), self._header_rect)
         pygame.draw.line(self.screen, (40, 40, 55),
-                         (0, _TOP_BAR_H - 1), (self.width, _TOP_BAR_H - 1))
+                         (0, self._header_h - 1),
+                         (self.width, self._header_h - 1))
 
-        # Game time
+        # Header content
         font = _get_font(22)
-        m, s = divmod(self._tick // 60, 60)
-        timer = font.render(f"{m}:{s:02d}", True, _STATUS_COLOR)
-        self.screen.blit(timer, (self.width // 2 - timer.get_width() // 2, 10))
 
         # Team indicator
         team_color = TEAM1_COLOR if self._my_team == 1 else TEAM2_COLOR
         team_label = font.render(f"Team {self._my_team}", True, team_color)
         self.screen.blit(team_label, (10, 10))
 
+        # Game time (centered)
+        m, s = divmod(self._tick // 60, 60)
+        timer = font.render(f"{m}:{s:02d}", True, _STATUS_COLOR)
+        self.screen.blit(timer, (self.width // 2 - timer.get_width() // 2, 10))
+
         # Disconnect warning
         if self._disconnect_timer > 3.0:
             warn = font.render("Connection lost...", True, _DISCONNECT_COLOR)
             self.screen.blit(warn, (self.width - warn.get_width() - 10, 10))
+
+        # FPS
+        fps_font = _get_font(18)
+        fps_val = self.clock.get_fps()
+        fps_surf = fps_font.render(f"FPS: {fps_val:.0f}", True, (200, 200, 200))
+        self.screen.blit(fps_surf, (team_label.get_width() + 20, 12))
+
+        # Game area: black background then camera projection
+        ga = self._game_area
+        pygame.draw.rect(self.screen, (0, 0, 0), ga)
+        self._camera.apply(ws, self.screen, dest=(ga.x, ga.y))
+
+        # Metallic border around the world edge (rendered in screen space)
+        bx0, by0 = self._camera.world_to_screen(0, 0)
+        bx1, by1 = self._camera.world_to_screen(self._map_w, self._map_h)
+        border_rect = pygame.Rect(
+            int(bx0) + ga.x, int(by0) + ga.y,
+            int(bx1 - bx0), int(by1 - by0),
+        )
+        clip_save = self.screen.get_clip()
+        self.screen.set_clip(ga)
+        _draw_metallic_border(self.screen, border_rect, 3)
+        self.screen.set_clip(clip_save)
+
+        # HUD area
+        pygame.draw.rect(self.screen, (20, 20, 30), self._hud_rect)
+        pygame.draw.line(self.screen, (40, 40, 55),
+                         (0, self._hud_rect.top),
+                         (self.width, self._hud_rect.top))
+        self._draw_hud()
 
         # Winner overlay
         if self._winner:
@@ -485,12 +596,192 @@ class ClientGameScreen(BaseScreen):
             self.screen.blit(surf, (self.width // 2 - surf.get_width() // 2,
                                     self.height // 2 - surf.get_height() // 2))
 
-        # Game area
-        ga = self._game_area
-        pygame.draw.rect(self.screen, (200, 100, 150), ga)
-        self._camera.apply(ws, self.screen, dest=(ga.x, ga.y))
-
         pygame.display.flip()
+
+    # -- HUD drawing --------------------------------------------------------
+
+    def _draw_hud(self) -> None:
+        """Draw the HUD panel at the bottom of the screen."""
+        cc = self._get_selected_cc()
+        selected_units = [
+            ent for ent in self._entities
+            if ent.get("id") in self._selected_ids and ent.get("t") == "U"
+        ]
+
+        # Action panel (rightmost section)
+        action_w = max(220, int(self.width * 0.20))
+        ar = pygame.Rect(self.width - action_w, self.height - self._hud_h,
+                         action_w, self._hud_h)
+        pygame.draw.rect(self.screen, _SECTION_BG, ar)
+        pygame.draw.line(self.screen, _DIVIDER,
+                         (ar.left, ar.top), (ar.left, ar.bottom))
+
+        tf = _get_font(18)
+        mx, my = pygame.mouse.get_pos()
+
+        if cc is not None and cc.get("tm") == self._my_team:
+            # Build options for CC
+            ts = tf.render("Build", True, _TITLE_COLOR)
+            self.screen.blit(ts, (ar.left + 8, ar.top + 6))
+
+            current_spawn = cc.get("st", "soldier")
+            for br, ut in self._build_btns:
+                is_sel = current_spawn == ut
+                is_hov = br.collidepoint(mx, my)
+                bg = (GUI_BTN_SELECTED if is_sel
+                      else GUI_BTN_HOVER if is_hov
+                      else GUI_BTN_NORMAL)
+
+                pygame.draw.rect(self.screen, bg, br, border_radius=4)
+                pygame.draw.rect(self.screen, GUI_BORDER, br, 1, border_radius=4)
+
+                st = UNIT_TYPES.get(ut, {})
+                sym = st.get("symbol")
+                cx, cy = br.centerx, br.centery
+                my_color = TEAM1_COLOR if self._my_team == 1 else TEAM2_COLOR
+                highlight = (150, 220, 255) if self._my_team == 1 else (255, 140, 140)
+                if sym is not None:
+                    sc = 0.9
+                    pts = [(cx + px * sc, cy + py * sc) for px, py in sym]
+                    pygame.draw.polygon(self.screen, my_color, pts)
+                    pygame.draw.polygon(self.screen, highlight, pts, 1)
+                else:
+                    pygame.draw.circle(self.screen, my_color, (cx, cy), 7)
+                    pygame.draw.circle(self.screen, highlight, (cx, cy), 7, 1)
+
+            # Tooltip for hovered button
+            for br, ut in self._build_btns:
+                if br.collidepoint(mx, my):
+                    self._draw_tooltip(ut, ar)
+                    break
+        elif selected_units:
+            ts = tf.render("Actions", True, _TITLE_COLOR)
+            self.screen.blit(ts, (ar.left + 8, ar.top + 6))
+
+        # Display panel (left of action panel) — show selected unit info
+        display_rect = pygame.Rect(0, self.height - self._hud_h,
+                                   self.width - action_w, self._hud_h)
+        pygame.draw.rect(self.screen, _SECTION_BG, display_rect)
+
+        if selected_units:
+            self._draw_unit_info(display_rect, selected_units)
+        elif cc is not None and cc.get("tm") == self._my_team:
+            self._draw_cc_info(display_rect, cc)
+
+    def _draw_unit_info(self, r: pygame.Rect, units: list[dict]) -> None:
+        """Show selected unit info in the display panel."""
+        pad = 8
+        tf = _get_font(18)
+        sf = _get_font(16)
+
+        if len(units) == 1:
+            ent = units[0]
+            ut = ent.get("ut", "soldier")
+            hp = ent.get("hp", 100)
+            stats = UNIT_TYPES.get(ut, {})
+            max_hp = stats.get("hp", 100)
+            name = ut.replace("_", " ").title()
+
+            y = r.top + pad
+            ns = tf.render(name, True, _TITLE_COLOR)
+            self.screen.blit(ns, (r.left + pad, y))
+            y += ns.get_height() + 4
+
+            # HP bar
+            bw = min(r.width - pad * 2, 150)
+            bh = 6
+            ratio = hp / max_hp if max_hp > 0 else 0
+            pygame.draw.rect(self.screen, HEALTH_BAR_BG, (r.left + pad, y, bw, bh))
+            fg = HEALTH_BAR_FG if ratio > 0.35 else HEALTH_BAR_LOW
+            pygame.draw.rect(self.screen, fg, (r.left + pad, y, int(bw * ratio), bh))
+            ht = sf.render(f"{int(hp)}/{int(max_hp)}", True, (200, 200, 220))
+            self.screen.blit(ht, (r.left + pad + bw + 6, y - 2))
+        else:
+            # Group count
+            count_text = tf.render(f"{len(units)} units selected", True, _TITLE_COLOR)
+            self.screen.blit(count_text, (r.left + pad, r.top + pad))
+
+            # Type breakdown
+            type_counts: dict[str, int] = {}
+            for ent in units:
+                ut = ent.get("ut", "soldier")
+                type_counts[ut] = type_counts.get(ut, 0) + 1
+            y = r.top + pad + count_text.get_height() + 4
+            for ut, cnt in type_counts.items():
+                name = ut.replace("_", " ").title()
+                ts = sf.render(f"{name}: {cnt}", True, _STAT_LABEL)
+                self.screen.blit(ts, (r.left + pad, y))
+                y += ts.get_height() + 2
+
+    def _draw_cc_info(self, r: pygame.Rect, cc: dict) -> None:
+        """Show command center info in the display panel."""
+        pad = 8
+        tf = _get_font(18)
+        sf = _get_font(16)
+
+        y = r.top + pad
+        ns = tf.render("Command Center", True, _TITLE_COLOR)
+        self.screen.blit(ns, (r.left + pad, y))
+        y += ns.get_height() + 4
+
+        hp = cc.get("hp", CC_HP)
+        bw = min(r.width - pad * 2, 150)
+        bh = 6
+        ratio = hp / CC_HP if CC_HP > 0 else 0
+        pygame.draw.rect(self.screen, HEALTH_BAR_BG, (r.left + pad, y, bw, bh))
+        fg = HEALTH_BAR_FG if ratio > 0.35 else HEALTH_BAR_LOW
+        pygame.draw.rect(self.screen, fg, (r.left + pad, y, int(bw * ratio), bh))
+        ht = sf.render(f"{int(hp)}/{int(CC_HP)}", True, (200, 200, 220))
+        self.screen.blit(ht, (r.left + pad + bw + 6, y - 2))
+        y += bh + 6
+
+        spawn_type = cc.get("st", "soldier")
+        st_text = sf.render(f"Spawning: {spawn_type.replace('_', ' ').title()}", True, _STAT_LABEL)
+        self.screen.blit(st_text, (r.left + pad, y))
+
+    def _draw_tooltip(self, utype: str, action_rect: pygame.Rect) -> None:
+        """Draw a stats tooltip above the action panel."""
+        stats = UNIT_TYPES.get(utype, {})
+        tf = _get_font(20)
+        bf = _get_font(16)
+
+        rows: list[tuple[str, str]] = [
+            ("HP", str(stats.get("hp", 100))),
+            ("Speed", str(stats.get("speed", 0))),
+        ]
+        wpn = stats.get("weapon")
+        if wpn:
+            if wpn["damage"] < 0:
+                rows.append(("Heal/pulse", str(abs(wpn["damage"]))))
+            else:
+                rows.append(("Damage", str(wpn["damage"])))
+            rows.append(("Range", str(wpn["range"])))
+            cd = wpn["cooldown"]
+            rows.append(("Cooldown", f"{cd:.1f}s" if cd != int(cd)
+                          else f"{int(cd)}s"))
+
+        name = utype.replace("_", " ").title()
+        tt_pad = 10
+        tt_line_h = 20
+        tt_width = 170
+        tt_h = tt_pad + tt_line_h + 4 + len(rows) * tt_line_h + tt_pad
+        tt_x = action_rect.left + 10
+        tt_y = action_rect.top - tt_h - 6
+
+        rect = pygame.Rect(tt_x, tt_y, tt_width, tt_h)
+        pygame.draw.rect(self.screen, (22, 22, 34), rect, border_radius=6)
+        pygame.draw.rect(self.screen, (70, 70, 100), rect, 1, border_radius=6)
+
+        ts = tf.render(name, True, (220, 220, 240))
+        self.screen.blit(ts, (tt_x + tt_pad, tt_y + tt_pad))
+
+        ry = tt_y + tt_pad + tt_line_h + 4
+        for label, value in rows:
+            ls = bf.render(label, True, (140, 140, 165))
+            vs = bf.render(value, True, (200, 200, 220))
+            self.screen.blit(ls, (tt_x + tt_pad, ry))
+            self.screen.blit(vs, (tt_x + tt_width - tt_pad - vs.get_width(), ry))
+            ry += tt_line_h
 
     # -- entity drawing (adapted from ReplayPlaybackScreen) -----------------
 

@@ -67,6 +67,7 @@ def _entity_visual(e: Entity) -> dict | None:
         if e.unit_type == "command_center":
             d["t"] = "CC"
             d["pts"] = [list(p) for p in e.points]
+            d["st"] = getattr(e, "spawn_type", "soldier")
         # ME-specific replay fields
         elif e.unit_type == "metal_extractor":
             d["t"] = "ME"

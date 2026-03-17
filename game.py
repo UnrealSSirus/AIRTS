@@ -97,11 +97,12 @@ class Game:
         replay_output_dir: str = "replays",
         screen_width: int | None = None,
         screen_height: int | None = None,
+        selectable_teams: set[int] | None = None,
     ):
         """
         *team_ai* maps team numbers to AI controllers.  Teams **not** present
-        in the dict are human-controlled.  At least one team must have an AI
-        (Human-vs-Human is not supported).
+        in the dict are human-controlled.  Pass ``team_ai={}`` for
+        Human-vs-Human (multiplayer).
 
         When *screen* and *clock* are provided (by the App controller),
         the Game will use them instead of creating its own.
@@ -192,6 +193,7 @@ class Game:
 
         self.team_ai: dict[int, BaseAI] = team_ai if team_ai is not None else {2: WanderAI()}
         self.human_teams: set[int] = {1, 2} - set(self.team_ai.keys())
+        self._selectable_teams: set[int] = selectable_teams if selectable_teams is not None else self.human_teams
 
         self._iteration = 0
         self._winner = 0  # 0 = undecided, 1 or 2 = that team won
@@ -266,7 +268,7 @@ class Game:
     def _apply_selectability(self):
         for e in self.entities:
             if hasattr(e, "team") and hasattr(e, "selectable"):
-                e.selectable = e.team in self.human_teams
+                e.selectable = e.team in self._selectable_teams
 
     def _bind_and_start_ais(self):
         for team_id, ai in self.team_ai.items():
@@ -824,7 +826,7 @@ class Game:
         # Spawn — spawn_step already appends to self.units; add to team lists
         entity_count_before_spawn = len(self.entities)
         _t = _perf()
-        spawn_step(self.entities, self.command_centers, self.human_teams, stats=self._stats, tick=self._iteration, units=self.units)
+        spawn_step(self.entities, self.command_centers, self._selectable_teams, stats=self._stats, tick=self._iteration, units=self.units)
 
         if len(self.entities) > entity_count_before_spawn:
             self._physics_cooldown = 60  # 1 second to settle after spawn
@@ -1191,7 +1193,7 @@ class Game:
         """Draw fog of war overlay — only when a human is playing."""
         if not self._has_human:
             return
-        view_team = next(iter(self.human_teams))
+        view_team = next(iter(self._selectable_teams))
 
         FOG_ALPHA = 200
         self._fog_surface.fill((0, 0, 0, FOG_ALPHA))

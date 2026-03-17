@@ -228,6 +228,7 @@ class App:
         }
 
         # Create game with NO AI — both teams are human
+        # selectable_teams={1} ensures host can only select/control team 1
         game = Game(
             width=width,
             height=height,
@@ -239,6 +240,7 @@ class App:
             player_name=host_name,
             screen_width=screen_w,
             screen_height=screen_h,
+            selectable_teams={1},
         )
 
         # Rebind the host's command queue to the game's actual queue
@@ -247,11 +249,6 @@ class App:
 
         # Send game_start to client
         host_obj.send_game_start(game.entities, width, height)
-
-        # Override selectability: host only selects team 1
-        for e in game.entities:
-            if hasattr(e, "team") and hasattr(e, "selectable"):
-                e.selectable = (e.team == 1)
 
         # Wrap the game's step to inject remote commands and broadcast state
         original_step = game.step
