@@ -20,7 +20,7 @@ class TeamStats:
         self.units_spawned: int = 0
         self.metal_spots_captured: int = 0
         self.actions: int = 0
-        self.build_order: list[tuple[int, str, int]] = []  # (team, unit_type, tick)
+        self.build_order: list[dict] = []  # {team, unit_type, tick, player_id}
 
         # Time-series snapshots (sampled every 60 ticks)
         self.ts_cc_health: list[float] = []
@@ -37,8 +37,8 @@ class GameStats:
 
     SAMPLE_INTERVAL = 100  # ticks between time-series snapshots (~1.67s at 60 tps)
 
-    def __init__(self):
-        self.teams: dict[int, TeamStats] = {1: TeamStats(), 2: TeamStats()}
+    def __init__(self, teams=(1, 2)):
+        self.teams: dict[int, TeamStats] = {t: TeamStats() for t in teams}
         self.timestamps: list[int] = []
         self._finalized = False
         self._step_times_buf: list[float] = []
@@ -71,9 +71,12 @@ class GameStats:
     def record_healing(self, team: int, amount: float):
         self.teams[team].healing_done += amount
 
-    def record_spawn(self, team: int, unit_type: str, tick: int):
+    def record_spawn(self, team: int, unit_type: str, tick: int, player_id: int | None = None):
         self.teams[team].units_spawned += 1
-        self.teams[team].build_order.append((team, unit_type, tick))
+        entry: dict = {"team": team, "unit_type": unit_type, "tick": tick}
+        if player_id is not None:
+            entry["player_id"] = player_id
+        self.teams[team].build_order.append(entry)
 
     def record_capture(self, team: int):
         self.teams[team].metal_spots_captured += 1
@@ -215,10 +218,7 @@ class GameStats:
                 "healing_done": round(ts.healing_done, 1),
                 "metal_spots_captured": ts.metal_spots_captured,
                 "actions": ts.actions,
-                "build_order": [
-                    {"team": t, "unit_type": ut, "tick": tk}
-                    for t, ut, tk in ts.build_order
-                ],
+                "build_order": list(ts.build_order),
             }
 
         return {

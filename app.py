@@ -93,10 +93,14 @@ class App:
             stats = data.get("stats")
             replay_filepath = data.get("replay_filepath")
             team_names = data.get("team_names", {})
+            player_names = data.get("player_names", {})
+            player_team = data.get("player_team", {})
             return ResultsScreen(self._screen, self._clock,
                                  winner, human_teams, stats=stats,
                                  replay_filepath=replay_filepath,
-                                 team_names=team_names).run()
+                                 team_names=team_names,
+                                 player_names=player_names,
+                                 player_team=player_team).run()
 
         elif name == "debug":
             return DebugScreen(self._screen, self._clock,
@@ -141,32 +145,42 @@ class App:
         width = data.get("width", 800)
         height = data.get("height", 600)
         obs = data.get("obstacle_count", (4, 8))
-        team_ai_ids: dict[int, str] = data.get("team_ai_ids", {})
         player_name: str = data.get("player_name", "Unnamed Player")
         headless: bool = data.get("headless", False)
         save_debug_summary: bool = data.get("save_debug_summary", False)
         time_limit: int = data.get("time_limit", 0)  # minutes, 0 = no limit
         max_ticks = time_limit * 60 * 60 if time_limit > 0 else 0  # 60 ticks/sec
 
+        # New format: player_ai_ids maps player_id → ai_id; fallback to legacy team_ai_ids
+        player_ai_ids: dict[int, str] = (
+            data.get("player_ai_ids")
+            or data.get("team_ai_ids")
+            or {}
+        )
+        player_team: dict[int, int] | None = data.get("player_team")
+
         # Build AI instances from registry
-        team_ai = {}
-        for team, ai_id in team_ai_ids.items():
+        player_ai: dict = {}
+        for pid, ai_id in player_ai_ids.items():
             try:
-                team_ai[team] = self._registry.create(ai_id)
+                player_ai[pid] = self._registry.create(ai_id)
             except KeyError:
                 from systems.ai import WanderAI
-                team_ai[team] = WanderAI()
+                player_ai[pid] = WanderAI()
 
-        if not team_ai:
+        # Fallback only for bare programmatic calls with no player_team.
+        # When a lobby sends player_team, all unspecified players are human — don't override them.
+        if not player_ai and player_team is None:
             from systems.ai import WanderAI
-            team_ai = {2: WanderAI()}
+            player_ai = {2: WanderAI()}
 
         screen_w = self._screen.get_width()
         screen_h = self._screen.get_height()
 
         replay_config = {
-            "team_ai_ids": team_ai_ids,
-            "team_ai_names": {t: ai.ai_name for t, ai in team_ai.items()},
+            "player_ai_ids": player_ai_ids,
+            "player_ai_names": {pid: ai.ai_name for pid, ai in player_ai.items()},
+            "player_team": player_team,  # needed for replay team-name resolution
             "obstacle_count": list(obs),
             "player_name": player_name,
         }
@@ -175,7 +189,8 @@ class App:
             width=width,
             height=height,
             map_generator=DefaultMapGenerator(obstacle_count=obs),
-            team_ai=team_ai,
+            player_ai=player_ai,
+            player_team=player_team,
             screen=self._screen,
             clock=self._clock,
             replay_config=replay_config,
@@ -201,6 +216,8 @@ class App:
             "stats": result.get("stats"),
             "replay_filepath": result.get("replay_filepath"),
             "team_names": result.get("team_names", {}),
+            "player_names": result.get("player_names", {}),
+            "player_team": result.get("player_team", {}),
         })
 
     def _run_mp_host_game(self, data: dict) -> ScreenResult:
@@ -239,6 +256,7 @@ class App:
             player_name=host_name,
             screen_width=screen_w,
             screen_height=screen_h,
+            is_multiplayer=True,
         )
 
         # Rebind the host's command queue to the game's actual queue

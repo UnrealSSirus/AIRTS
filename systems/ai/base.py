@@ -31,6 +31,7 @@ class BaseAI(ABC):
     ai_name: str = ""
 
     def __init__(self):
+        self._player_id: int = 0
         self._team: int = 0
         self._game = None  # set by Game._bind_ai — avoids circular import
         self._stats = None  # set by Game via _bind()
@@ -38,8 +39,9 @@ class BaseAI(ABC):
 
     # -- lifecycle (called by Game) -----------------------------------------
 
-    def _bind(self, team: int, game, stats=None, command_queue=None):
-        self._team = team
+    def _bind(self, player_id: int, team_id: int, game, stats=None, command_queue=None):
+        self._player_id = player_id
+        self._team = team_id
         self._game = game
         self._stats = stats
         self._command_queue = command_queue
@@ -82,7 +84,15 @@ class BaseAI(ABC):
 
     def get_own_units(self) -> list[Unit]:
         return sorted(
-            [u for u in self._units if u.alive and u.team == self._team],
+            [u for u in self._units if u.alive and u.player_id == self._player_id],
+            key=lambda u: u.entity_id,
+        )
+
+    def get_ally_units(self) -> list[Unit]:
+        """Return living units on the same alliance team but controlled by a different player."""
+        return sorted(
+            [u for u in self._units if u.alive and u.team == self._team
+             and u.player_id != self._player_id],
             key=lambda u: u.entity_id,
         )
 
@@ -100,7 +110,8 @@ class BaseAI(ABC):
 
     def get_own_mobile_units(self) -> list[Unit]:
         return sorted(
-            [u for u in self._units if u.alive and u.team == self._team and not u.is_building],
+            [u for u in self._units if u.alive and u.player_id == self._player_id
+             and not u.is_building],
             key=lambda u: u.entity_id,
         )
 
@@ -130,7 +141,7 @@ class BaseAI(ABC):
 
     def get_cc(self) -> CommandCenter | None:
         for e in self._entities:
-            if isinstance(e, CommandCenter) and e.alive and e.team == self._team:
+            if isinstance(e, CommandCenter) and e.alive and e.player_id == self._player_id:
                 return e
         return None
 
@@ -144,7 +155,7 @@ class BaseAI(ABC):
         tick = self._game._iteration if self._game else 0
         self._command_queue.enqueue(GameCommand(
             type="move",
-            team=self._team,
+            player_id=self._player_id,
             tick=tick,
             data={"unit_ids": [unit.entity_id], "targets": [(x, y)]},
         ))
@@ -154,9 +165,29 @@ class BaseAI(ABC):
         tick = self._game._iteration if self._game else 0
         self._command_queue.enqueue(GameCommand(
             type="attack",
-            team=self._team,
+            player_id=self._player_id,
             tick=tick,
             data={"unit_id": unit.entity_id, "target_id": target.entity_id},
+        ))
+        self._record_action()
+
+    def stop(self, unit_ids: list[int]):
+        tick = self._game._iteration if self._game else 0
+        self._command_queue.enqueue(GameCommand(
+            type="stop",
+            player_id=self._player_id,
+            tick=tick,
+            data={"unit_ids": unit_ids},
+        ))
+        self._record_action()
+
+    def set_rally(self, cc_id: int, pos: tuple[float, float]):
+        tick = self._game._iteration if self._game else 0
+        self._command_queue.enqueue(GameCommand(
+            type="set_rally",
+            player_id=self._player_id,
+            tick=tick,
+            data={"position": list(pos)},
         ))
         self._record_action()
 
@@ -170,8 +201,8 @@ class BaseAI(ABC):
             tick = self._game._iteration if self._game else 0
             self._command_queue.enqueue(GameCommand(
                 type="set_spawn_type",
-                team=self._team,
+                player_id=self._player_id,
                 tick=tick,
-                data={"team": self._team, "unit_type": unit_type},
+                data={"unit_type": unit_type},
             ))
             self._record_action()

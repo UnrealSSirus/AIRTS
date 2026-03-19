@@ -1,7 +1,7 @@
 from __future__ import annotations
 from config.settings import (
-    METAL_SPOT_COLOR, METAL_SPOT_RADIUS, METAL_SPOT_CAPTURE_RATE, METAL_SPOT_CAPTURE_RADIUS, METAL_SPOT_CAPTURE_ARC_WIDTH, METAL_SPOT_CAPTURE_ARC_COLOR_T1, METAL_SPOT_CAPTURE_ARC_COLOR_T2, METAL_SPOT_CAPTURE_RANGE_COLOR,
-    TEAM1_COLOR, TEAM2_COLOR,
+    METAL_SPOT_COLOR, METAL_SPOT_RADIUS, METAL_SPOT_CAPTURE_RATE, METAL_SPOT_CAPTURE_RADIUS, METAL_SPOT_CAPTURE_ARC_WIDTH, METAL_SPOT_CAPTURE_RANGE_COLOR,
+    TEAM_COLORS,
 )
 from entities.shapes import CircleEntity
 from entities.base import Damageable
@@ -51,17 +51,17 @@ class MetalSpot(CircleEntity, Damageable):
         # draw the base circle
         if self.owner is None:
             color = self.color
-        elif self.owner == 1:
-            color = TEAM1_COLOR
         else:
-            color = TEAM2_COLOR
+            color = TEAM_COLORS.get(self.owner, self.color)
         pygame.draw.circle(surface, color, self.center(), self.radius)
 
         if self.owner is not None:
             return
 
         # draw the capture progress pie chart
-        progress_color = METAL_SPOT_CAPTURE_ARC_COLOR_T1 if self.capture_progress > 0 else METAL_SPOT_CAPTURE_ARC_COLOR_T2
+        _default_arc = (200, 200, 60)
+        progress_color = (TEAM_COLORS.get(1, _default_arc) if self.capture_progress > 0
+                          else TEAM_COLORS.get(2, _default_arc))
         arc_r = METAL_SPOT_CAPTURE_RADIUS + METAL_SPOT_CAPTURE_ARC_WIDTH
         start_angle = math.pi / 2
         end_angle = start_angle + self.capture_progress * math.tau

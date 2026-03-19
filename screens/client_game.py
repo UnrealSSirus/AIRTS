@@ -13,10 +13,8 @@ from config.settings import (
     METAL_SPOT_CAPTURE_RANGE_COLOR, METAL_EXTRACTOR_RADIUS,
     CC_HP, METAL_EXTRACTOR_HP,
     METAL_SPOT_CAPTURE_ARC_WIDTH,
-    METAL_SPOT_CAPTURE_ARC_COLOR_T1,
-    METAL_SPOT_CAPTURE_ARC_COLOR_T2,
     SELECTED_COLOR, SELECTION_FILL_COLOR, SELECTION_RECT_COLOR,
-    TEAM1_COLOR, TEAM2_COLOR,
+    TEAM1_COLOR, TEAM2_COLOR, TEAM_COLORS,
     CAMERA_ZOOM_STEP, CAMERA_MAX_ZOOM,
     EDGE_PAN_MARGIN, EDGE_PAN_SPEED,
 )
@@ -271,9 +269,9 @@ class ClientGameScreen(BaseScreen):
                             and ent.get("tm") == self._my_team):
                         self._client.send_command(GameCommand(
                             type="set_rally",
-                            team=self._my_team,
+                            player_id=self._my_team,
                             tick=self._tick,
-                            data={"team": self._my_team, "position": list(rally)},
+                            data={"position": list(rally)},
                         ))
             return
 
@@ -306,7 +304,7 @@ class ClientGameScreen(BaseScreen):
         if unit_ids:
             self._client.send_command(GameCommand(
                 type="move",
-                team=self._my_team,
+                player_id=self._my_team,
                 tick=self._tick,
                 data={"unit_ids": unit_ids, "targets": targets},
             ))
@@ -556,8 +554,8 @@ class ClientGameScreen(BaseScreen):
         pygame.draw.circle(ws, color, (int(x), int(y)), int(r))
 
         if ow is None and abs(cp) > 0.01:
-            progress_color = (METAL_SPOT_CAPTURE_ARC_COLOR_T1 if cp > 0
-                              else METAL_SPOT_CAPTURE_ARC_COLOR_T2)
+            progress_color = (TEAM_COLORS.get(1, (80, 140, 255)) if cp > 0
+                              else TEAM_COLORS.get(2, (255, 80, 80)))
             arc_r = METAL_SPOT_CAPTURE_RADIUS + METAL_SPOT_CAPTURE_ARC_WIDTH
             start_angle = math.pi / 2
             end_angle = start_angle + cp * math.tau

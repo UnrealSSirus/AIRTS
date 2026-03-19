@@ -33,7 +33,7 @@ class GameClient:
         self._outbound_commands: queue.Queue[str] = queue.Queue()
 
         # Connection state
-        self.client_team: int = 2
+        self.player_id: int = 2  # assigned by host in lobby_info
         self.host_name: str = ""
         self.map_width: int = 800
         self.map_height: int = 600
@@ -45,6 +45,11 @@ class GameClient:
         self._running = True
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
+
+    @property
+    def client_team(self) -> int:
+        """Legacy alias for player_id (1v1: player_id == team)."""
+        return self.player_id
 
     @property
     def connected(self) -> bool:
@@ -122,7 +127,7 @@ class GameClient:
             # Receive lobby info
             msg = await asyncio.wait_for(recv_message(reader), timeout=10.0)
             if msg and msg.get("msg") == "lobby_info":
-                self.client_team = msg.get("client_team", 2)
+                self.player_id = msg.get("client_player_id", msg.get("client_team", 2))
                 self.host_name = msg.get("host_name", "Host")
 
             # Send join

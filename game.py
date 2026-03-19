@@ -23,7 +23,7 @@ from config.settings import (
     SELECTION_FILL_COLOR, SELECTION_RECT_COLOR,
     COMMAND_PATH_COLOR, COMMAND_DOT_COLOR, PATH_SAMPLE_MIN_DIST,
     FIXED_DT, MAX_FRAME_DT, CC_RADIUS,
-    TEAM1_COLOR, TEAM2_COLOR, HEALTH_BAR_OFFSET,
+    PLAYER_COLORS, TEAM_COLORS, HEALTH_BAR_OFFSET,
     CAMERA_ZOOM_STEP, CAMERA_MAX_ZOOM,
     EDGE_PAN_MARGIN, EDGE_PAN_SPEED,
 )
@@ -84,7 +84,9 @@ class Game:
         height: int = 600,
         title: str = "AIRTS",
         map_generator: BaseMapGenerator | None = None,
-        team_ai: dict[int, BaseAI] | None = None,
+        player_ai: dict[int, BaseAI] | None = None,
+        player_team: dict[int, int] | None = None,
+        team_ai: dict[int, BaseAI] | None = None,  # legacy alias for player_ai
         screen: pygame.Surface | None = None,
         clock: pygame.time.Clock | None = None,
         replay_config: dict | None = None,
@@ -97,21 +99,24 @@ class Game:
         replay_output_dir: str = "replays",
         screen_width: int | None = None,
         screen_height: int | None = None,
+        is_multiplayer: bool = False,
     ):
         """
-        *team_ai* maps team numbers to AI controllers.  Teams **not** present
-        in the dict are human-controlled.  At least one team must have an AI
-        (Human-vs-Human is not supported).
+        *player_ai* maps player_id → AI controller.  Players **not** present
+        are human-controlled.  *player_team* maps player_id → team_id.
 
-        When *screen* and *clock* are provided (by the App controller),
-        the Game will use them instead of creating its own.
+        Legacy *team_ai* (maps team_id → AI) is still accepted and treated as
+        player_ai with team_id == player_id (1v1 default).
 
         Examples::
 
-            team_ai={2: WanderAI()}          # Human (T1) vs AI (T2)
-            team_ai={1: MyAI()}              # AI (T1) vs Human (T2)
-            team_ai={1: MyAI(), 2: WanderAI()} # AI vs AI (spectator)
+            player_ai={2: WanderAI()}, player_team={1:1, 2:2}  # Human (P1/T1) vs AI (P2/T2)
+            player_ai={1: EasyAI(), 2: WanderAI(), 3: EasyAI(), 4: WanderAI()},
+            player_team={1:1, 2:1, 3:2, 4:2}  # 2v2
         """
+        # Backward compat: treat team_ai as player_ai when player_ai not given
+        if player_ai is None and team_ai is not None:
+            player_ai = team_ai
         if screen is None:
             pygame.init()
             self.screen = pygame.display.set_mode((width, height))
@@ -165,14 +170,37 @@ class Game:
         else:
             self._sounds: dict[str, pygame.mixer.Sound] = {}
 
+        # -- player/team resolution -------------------------------------------
+        _default_ai: dict[int, BaseAI] = {2: WanderAI()}
+        self.player_ai: dict[int, BaseAI] = player_ai if player_ai is not None else _default_ai
+
+        if player_team is not None:
+            self.player_team: dict[int, int] = player_team
+        else:
+            # Default: each player is their own team (1v1 / AI-vs-AI)
+            _all_pids = set(self.player_ai.keys()) | {1, 2}
+            self.player_team = {p: p for p in _all_pids}
+
+        self.all_teams: set[int] = set(self.player_team.values())
+        self.all_players: set[int] = set(self.player_team.keys())
+        self.human_players: set[int] = self.all_players - set(self.player_ai.keys())
+        self.human_teams: set[int] = {self.player_team[p] for p in self.human_players}
+
+        # Legacy alias so external code (Perigee, arena, etc.) keeps working
+        self.team_ai: dict[int, BaseAI] = self.player_ai
+
         gen = map_generator or DefaultMapGenerator()
-        self.entities = gen.generate(width, height)
+        self.entities = gen.generate(width, height, player_team=self.player_team)
         self.metal_spots: list[MetalSpot] = [
             e for e in self.entities if isinstance(e, MetalSpot)
         ]
         self.units: list[Unit] = [e for e in self.entities if isinstance(e, Unit)]
-        self.team_1_units: list[Unit] = [u for u in self.units if u.team == 1]
-        self.team_2_units: list[Unit] = [u for u in self.units if u.team == 2]
+        self.team_units: dict[int, list[Unit]] = {
+            t: [u for u in self.units if u.team == t] for t in self.all_teams
+        }
+        # Backward-compat references
+        self.team_1_units: list[Unit] = self.team_units.get(1, [])
+        self.team_2_units: list[Unit] = self.team_units.get(2, [])
         self.command_centers: list[CommandCenter] = [
             e for e in self.entities if isinstance(e, CommandCenter)
         ]
@@ -190,19 +218,17 @@ class Game:
         self._accumulator: float = 0.0
         self._assign_entity_ids()
 
-        self.team_ai: dict[int, BaseAI] = team_ai if team_ai is not None else {2: WanderAI()}
-        self.human_teams: set[int] = {1, 2} - set(self.team_ai.keys())
-
         self._iteration = 0
-        self._winner = 0  # 0 = undecided, 1 or 2 = that team won
-        self._stats = GameStats()
+        self._winner = 0  # 0 = undecided, positive = winning team, -1 = draw
+        self._stats = GameStats(teams=self.all_teams)
 
         self._command_queue = CommandQueue()
 
         self._apply_selectability()
         self._bind_and_start_ais()
 
-        self._has_human = len(self.human_teams) > 0
+        self._has_human = len(self.human_players) > 0
+        self._is_multiplayer = is_multiplayer
         self._dragging = False
         self._drag_start: tuple[int, int] = (0, 0)
         self._drag_end: tuple[int, int] = (0, 0)
@@ -245,14 +271,15 @@ class Game:
 
         self._physics_cooldown: int = 60  # ticks remaining; handles initial spawn settling
 
-        # Cache CC visual data at init (CCs don't move)
+        # Cache CC visual data at init (CCs don't move), keyed by player_id
         self._cc_data: dict[int, dict] = {}
         for e in self.entities:
             if isinstance(e, CommandCenter):
-                self._cc_data[e.team] = {
+                self._cc_data[e.player_id] = {
                     "x": e.x, "y": e.y,
                     "color": e.color,
                     "points": list(e.points),
+                    "team": e.team,
                 }
 
     # -- init helpers -------------------------------------------------------
@@ -265,12 +292,12 @@ class Game:
 
     def _apply_selectability(self):
         for e in self.entities:
-            if hasattr(e, "team") and hasattr(e, "selectable"):
-                e.selectable = e.team in self.human_teams
+            if hasattr(e, "player_id") and hasattr(e, "selectable"):
+                e.selectable = e.player_id in self.human_players
 
     def _bind_and_start_ais(self):
-        for team_id, ai in self.team_ai.items():
-            ai._bind(team_id, self, stats=self._stats,
+        for pid, ai in self.player_ai.items():
+            ai._bind(pid, self.player_team[pid], self, stats=self._stats,
                      command_queue=self._command_queue)
             ai.on_start()
 
@@ -366,42 +393,39 @@ class Game:
         rally = self._rpath[-1]
         for entity in self.entities:
             if isinstance(entity, CommandCenter) and entity.selected:
-                team = entity.team
-                if team in self.human_teams:
+                pid = entity.player_id
+                if pid in self.human_players:
                     self._command_queue.enqueue(GameCommand(
                         type="set_rally",
-                        team=team,
+                        player_id=pid,
                         tick=self._iteration,
-                        data={"team": team, "position": list(rally)},
+                        data={"position": list(rally)},
                     ))
-                    self._stats.record_action(team)
+                    self._stats.record_action(entity.team)
 
     def _assign_path_goals(self):
         selected = [e for e in self.entities if isinstance(e, Unit) and e.selected]
         if not selected or len(self._rpath) < 2:
             if selected and len(self._rpath) == 1:
                 px, py = self._rpath[0]
-                unit_ids = []
-                targets = []
+                by_player: dict[int, list[int]] = {}
                 for u in selected:
-                    unit_ids.append(u.entity_id)
-                    targets.append((px, py))
-                    if u.team in self.human_teams:
+                    if u.player_id in self.human_players:
                         self._stats.record_action(u.team)
-                if unit_ids:
-                    team = selected[0].team
+                    by_player.setdefault(u.player_id, []).append(u.entity_id)
+                for pid, uids in by_player.items():
                     self._command_queue.enqueue(GameCommand(
                         type="move",
-                        team=team,
+                        player_id=pid,
                         tick=self._iteration,
-                        data={"unit_ids": unit_ids, "targets": targets},
+                        data={"unit_ids": uids, "targets": [(px, py)] * len(uids)},
                     ))
             return
 
         goals = self._resample_path(len(selected))
         assigned: set[int] = set()
-        unit_ids: list[int] = []
-        targets: list[tuple[float, float]] = []
+        # (player_id, entity_id, target)
+        assignments: list[tuple[int, int, tuple[float, float]]] = []
 
         for gx, gy in goals:
             best_idx = -1
@@ -414,19 +438,24 @@ class Game:
                     best_dist = d
                     best_idx = i
             if best_idx >= 0:
-                unit_ids.append(selected[best_idx].entity_id)
-                targets.append((gx, gy))
+                u = selected[best_idx]
+                assignments.append((u.player_id, u.entity_id, (gx, gy)))
                 assigned.add(best_idx)
-                if selected[best_idx].team in self.human_teams:
-                    self._stats.record_action(selected[best_idx].team)
+                if u.player_id in self.human_players:
+                    self._stats.record_action(u.team)
 
-        if unit_ids:
-            team = selected[0].team
+        by_player: dict[int, tuple[list[int], list[tuple[float, float]]]] = {}
+        for pid, eid, tgt in assignments:
+            if pid not in by_player:
+                by_player[pid] = ([], [])
+            by_player[pid][0].append(eid)
+            by_player[pid][1].append(tgt)
+        for pid, (uids, tgts) in by_player.items():
             self._command_queue.enqueue(GameCommand(
                 type="move",
-                team=team,
+                player_id=pid,
                 tick=self._iteration,
-                data={"unit_ids": unit_ids, "targets": targets},
+                data={"unit_ids": uids, "targets": tgts},
             ))
 
     # -- pause / mouse grab ------------------------------------------------
@@ -623,30 +652,31 @@ class Game:
         if cmd.type == "move":
             for uid, (tx, ty) in zip(data["unit_ids"], data["targets"]):
                 unit = id_map.get(uid)
-                if isinstance(unit, Unit) and unit.alive:
+                if isinstance(unit, Unit) and unit.alive and unit.player_id == cmd.player_id:
                     unit.move(tx, ty)
 
         elif cmd.type == "attack":
             unit = id_map.get(data["unit_id"])
             target = id_map.get(data["target_id"])
-            if isinstance(unit, Unit) and unit.alive and target is not None and target.alive:
+            if (isinstance(unit, Unit) and unit.alive and unit.player_id == cmd.player_id
+                    and target is not None and target.alive):
                 unit.attack_target = target
 
         elif cmd.type == "stop":
             for uid in data["unit_ids"]:
                 unit = id_map.get(uid)
-                if isinstance(unit, Unit) and unit.alive:
+                if isinstance(unit, Unit) and unit.alive and unit.player_id == cmd.player_id:
                     unit.stop()
 
         elif cmd.type == "set_rally":
             pos = tuple(data["position"])
             for e in self.entities:
-                if isinstance(e, CommandCenter) and e.team == data["team"]:
+                if isinstance(e, CommandCenter) and e.player_id == cmd.player_id:
                     e.rally_point = pos
 
         elif cmd.type == "set_spawn_type":
             for e in self.entities:
-                if isinstance(e, CommandCenter) and e.team == data["team"]:
+                if isinstance(e, CommandCenter) and e.player_id == cmd.player_id:
                     e.spawn_type = data["unit_type"]
 
     def _handle_hud_action(self, result: dict):
@@ -657,21 +687,24 @@ class Game:
             if cc is not None:
                 self._command_queue.enqueue(GameCommand(
                     type="set_spawn_type",
-                    team=cc.team,
+                    player_id=cc.player_id,
                     tick=self._iteration,
-                    data={"team": cc.team, "unit_type": result["unit_type"]},
+                    data={"unit_type": result["unit_type"]},
                 ))
         elif action == "stop":
             selected = [e for e in self.entities
                         if isinstance(e, Unit) and e.selected and not e.is_building]
             if selected:
-                team = selected[0].team
-                self._command_queue.enqueue(GameCommand(
-                    type="stop",
-                    team=team,
-                    tick=self._iteration,
-                    data={"unit_ids": [u.entity_id for u in selected]},
-                ))
+                by_player: dict[int, list[int]] = {}
+                for u in selected:
+                    by_player.setdefault(u.player_id, []).append(u.entity_id)
+                for pid, uids in by_player.items():
+                    self._command_queue.enqueue(GameCommand(
+                        type="stop",
+                        player_id=pid,
+                        tick=self._iteration,
+                        data={"unit_ids": uids},
+                    ))
 
     # -- step ---------------------------------------------------------------
 
@@ -787,12 +820,13 @@ class Game:
         metal_extractors = self.metal_extractors
 
         _t = _perf()
-        for team, ai in self.team_ai.items():
+        for player_id, ai in self.player_ai.items():
             try:
                 ai.on_step(self._iteration)
             except Exception:
-                other_team = 2 if team == 1 else 1
-                self._winner = other_team
+                failing_team = self.player_team.get(player_id)
+                surviving = self.all_teams - ({failing_team} if failing_team else set())
+                self._winner = next(iter(surviving)) if len(surviving) == 1 else -1
                 self._phase = "explode"
                 self._anim_timer = 0.0
         self._stats.record_subsystem("ai_step", (_perf() - _t) * 1000)
@@ -800,17 +834,14 @@ class Game:
         # Capture — track new entities so extractors join units + team lists
         entity_count_before_capture = len(self.entities)
         _t = _perf()
-        capture_step(self.entities, self.command_centers, self.units, self.metal_spots, metal_extractors, dt, stats=self._stats, grid=self._quadfield)
+        capture_step(self.entities, self.command_centers, self.units, self.metal_spots, metal_extractors, dt, stats=self._stats, grid=self._quadfield, teams=self.all_teams)
 
         if len(self.entities) > entity_count_before_capture:
             for e in self.entities[entity_count_before_capture:]:
                 if isinstance(e, Unit):
                     self.units.append(e)
                     self._quadfield.add_unit(e)
-                    if e.team == 1:
-                        self.team_1_units.append(e)
-                    elif e.team == 2:
-                        self.team_2_units.append(e)
+                    self.team_units.setdefault(e.team, []).append(e)
         self._stats.record_subsystem("capture", (_perf() - _t) * 1000)
 
         _t = _perf()
@@ -824,17 +855,14 @@ class Game:
         # Spawn — spawn_step already appends to self.units; add to team lists
         entity_count_before_spawn = len(self.entities)
         _t = _perf()
-        spawn_step(self.entities, self.command_centers, self.human_teams, stats=self._stats, tick=self._iteration, units=self.units)
+        spawn_step(self.entities, self.command_centers, self.human_players, stats=self._stats, tick=self._iteration, units=self.units)
 
         if len(self.entities) > entity_count_before_spawn:
             self._physics_cooldown = 60  # 1 second to settle after spawn
             for e in self.entities[entity_count_before_spawn:]:
                 if isinstance(e, Unit):
                     self._quadfield.add_unit(e)
-                    if e.team == 1:
-                        self.team_1_units.append(e)
-                    elif e.team == 2:
-                        self.team_2_units.append(e)
+                    self.team_units.setdefault(e.team, []).append(e)
         self._stats.record_subsystem("spawn", (_perf() - _t) * 1000)
 
         _t = _perf()
@@ -849,8 +877,9 @@ class Game:
         if _had_deaths:
             self.entities = [e for e in self.entities if e.alive]
             self.units = [u for u in self.units if u.alive]
-            self.team_1_units = [u for u in self.team_1_units if u.alive]
-            self.team_2_units = [u for u in self.team_2_units if u.alive]
+            for t in self.all_teams:
+                if t in self.team_units:
+                    self.team_units[t] = [u for u in self.team_units[t] if u.alive]
             self.command_centers = [c for c in self.command_centers if c.alive]
             self.metal_extractors = [m for m in self.metal_extractors if m.alive]
         self._stats.record_subsystem("cleanup", (_perf() - _t) * 1000)
@@ -935,18 +964,18 @@ class Game:
                 self._iteration, self.entities, self.laser_flashes,
             )
 
-        # -- win condition: check if < 2 teams have a living CC ----------------
-        surviving_teams = {cc.team for cc in self.command_centers}
-        if len(surviving_teams) < 2 and self._winner == 0:
+        # -- win condition: check if < all teams have a living CC ---------------
+        surviving_teams = {cc.team for cc in self.command_centers if cc.alive}
+        if len(surviving_teams) < len(self.all_teams) and self._winner == 0:
             if len(surviving_teams) == 1:
                 self._winner = next(iter(surviving_teams))
             else:
-                self._winner = -1  # draw — both CCs destroyed
+                self._winner = -1  # draw
             # Transition to explode phase instead of ending immediately
             self._phase = "explode"
             self._anim_timer = 0.0
             # Init fragments for all losing teams
-            losing_teams = {1, 2} - surviving_teams
+            losing_teams = self.all_teams - surviving_teams
             for t in losing_teams:
                 self._init_fragments(t)
 
@@ -1025,8 +1054,7 @@ class Game:
         self.entities = [e for e, _ in pairs]
         self.metal_spots = [e for e in self.entities if isinstance(e, MetalSpot)]
         self.units = [e for e in self.entities if isinstance(e, Unit)]
-        self.team_1_units = [u for u in self.units if u.team == 1]
-        self.team_2_units = [u for u in self.units if u.team == 2]
+        self.team_units = {t: [u for u in self.units if u.team == t] for t in self.all_teams}
         self.command_centers = [e for e in self.entities if isinstance(e, CommandCenter)]
         self.metal_extractors = [e for e in self.entities if isinstance(e, MetalExtractor)]
         self._precompute_obstacles()
@@ -1084,13 +1112,13 @@ class Game:
         # AI / Human name labels above command centers (with bonus %)
         for entity in self.entities:
             if isinstance(entity, CommandCenter) and entity.alive:
-                ai = self.team_ai.get(entity.team)
+                ai = self.player_ai.get(entity.player_id)
                 name = ai.ai_name if ai else self._player_name
                 bonus_pct = entity.get_total_bonus_percent()
                 if bonus_pct > 0:
                     name = f"{name} (+{bonus_pct}%)"
-                team_color = TEAM1_COLOR if entity.team == 1 else TEAM2_COLOR
-                name_surf = self._label_font.render(name, True, team_color)
+                label_color = PLAYER_COLORS[entity.player_id - 1]
+                name_surf = self._label_font.render(name, True, label_color)
                 nx = int(entity.x) - name_surf.get_width() // 2
                 ny = int(entity.y) - 40
                 ws.blit(name_surf, (nx, ny))
@@ -1100,9 +1128,9 @@ class Game:
             if entity.alive:
                 bonus = entity.get_spawn_bonus()
                 pct = round(bonus * 100)
-                team_color = TEAM1_COLOR if entity.team == 1 else TEAM2_COLOR
+                label_color = TEAM_COLORS.get(entity.team, PLAYER_COLORS[0])
                 label = f"+{pct}%"
-                label_surf = self._label_font.render(label, True, team_color)
+                label_surf = self._label_font.render(label, True, label_color)
                 lx = int(entity.x) - label_surf.get_width() // 2
                 ly = int(entity.y) - int(entity.radius + HEALTH_BAR_OFFSET + 12)
                 ws.blit(label_surf, (lx, ly))
@@ -1188,22 +1216,28 @@ class Game:
     # -- drawing helpers ----------------------------------------------------
 
     def _draw_fog(self):
-        """Draw fog of war overlay — only when a human is playing."""
+        """Draw fog of war overlay — only when a human is playing.
+
+        Fog is skipped entirely in local games where humans play on multiple teams
+        (useful for debugging / local co-op/vs). Online multiplayer always keeps fog.
+        """
         if not self._has_human:
             return
-        view_team = next(iter(self.human_teams))
+        # Local game with humans on both teams → no fog (full visibility)
+        if not self._is_multiplayer and len(self.human_teams) > 1:
+            return
 
         FOG_ALPHA = 200
         self._fog_surface.fill((0, 0, 0, FOG_ALPHA))
 
-        # Collect friendly LOS sources (units + command centers)
+        # Collect LOS sources for all human teams
         los_circles: list[tuple[int, int, int]] = []
         for entity in self.entities:
             if not entity.alive:
                 continue
             if not hasattr(entity, "line_of_sight") or not hasattr(entity, "team"):
                 continue
-            if entity.team != view_team:
+            if entity.team not in self.human_teams:
                 continue
             r = int(entity.line_of_sight)
             if r <= 0:
@@ -1261,8 +1295,13 @@ class Game:
         self._draw_fog()
 
     def _init_fragments(self, team: int):
-        """Create 6 triangular fragments from the losing CC's hexagon."""
-        data = self._cc_data.get(team)
+        """Create 6 triangular fragments from each losing CC's hexagon."""
+        for pid, data in self._cc_data.items():
+            if data.get("team") != team:
+                continue
+            self._init_fragments_for_cc(data)
+
+    def _init_fragments_for_cc(self, data: dict):
         if not data:
             return
 
@@ -1345,8 +1384,6 @@ class Game:
         sx = sw / self.width
         sy = sh / self.height
 
-        t1 = TEAM1_COLOR
-        t2 = TEAM2_COLOR
         gold = (255, 200, 60)
         obstacle_col = (80, 80, 80)
 
@@ -1359,25 +1396,21 @@ class Game:
 
         # Metal spots
         for ms in self.metal_spots:
-            col = gold
-            if getattr(ms, "owner", None) == 1:
-                col = t1
-            elif getattr(ms, "owner", None) == 2:
-                col = t2
+            col = gold if ms.owner is None else TEAM_COLORS.get(ms.owner, gold)
             pygame.draw.circle(surf, col,
                                (int(ms.x * sx), int(ms.y * sy)), 3)
 
         # Metal extractors
         for e in self.metal_extractors:
             if e.alive:
-                col = t1 if e.team == 1 else t2
+                col = TEAM_COLORS.get(e.team, PLAYER_COLORS[0])
                 px, py = int(e.x * sx), int(e.y * sy)
                 pygame.draw.polygon(surf, col,
                                     [(px, py - 3), (px + 3, py + 2), (px - 3, py + 2)])
 
         # Command centers
         for cc in self.command_centers:
-            col = t1 if cc.team == 1 else t2
+            col = PLAYER_COLORS[cc.player_id - 1]
             pygame.draw.circle(surf, col,
                                (int(cc.x * sx), int(cc.y * sy)), 5)
             pygame.draw.circle(surf, (255, 255, 255),
@@ -1387,7 +1420,7 @@ class Game:
         for u in self.units:
             if u.is_building or not u.alive:
                 continue
-            col = t1 if u.team == 1 else t2
+            col = PLAYER_COLORS[u.player_id - 1]
             r = 2 if u.unit_type != "tank" else 3
             pygame.draw.circle(surf, col,
                                (int(u.x * sx), int(u.y * sy)), r)
@@ -1492,10 +1525,22 @@ class Game:
         else:
             replay_path = ""
 
-        team_names = {}
-        for team in [1, 2]:
-            ai = self.team_ai.get(team)
-            team_names[team] = ai.ai_name if ai else self._player_name
+        # Build per-player name: AI name for AI players, player_name for humans
+        player_names: dict[int, str] = {
+            pid: (self.player_ai[pid].ai_name if pid in self.player_ai
+                  else self._player_name)
+            for pid in sorted(self.all_players)
+        }
+
+        # Build per-team name: join all player names with " & "
+        team_names: dict[int, str] = {}
+        for team in self.all_teams:
+            names = [
+                player_names[pid]
+                for pid in sorted(self.all_players)
+                if self.player_team.get(pid) == team
+            ]
+            team_names[team] = " & ".join(names) if names else f"Team {team}"
 
         if self._save_debug_summary:
             log_path = self._stats.save_summary_log(
@@ -1509,6 +1554,8 @@ class Game:
             "stats": stats_data,
             "replay_filepath": replay_path,
             "team_names": team_names,
+            "player_names": player_names,
+            "player_team": dict(self.player_team),
         }
 
         if self._owns_pygame:

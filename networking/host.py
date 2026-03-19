@@ -40,7 +40,7 @@ class GameHost:
 
         # Connection state
         self._client_name: str = ""
-        self._client_team: int = 2  # client always plays team 2
+        self._client_player_id: int = 2  # client always plays player 2 in 1v1
         self._client_connected = threading.Event()
         self._client_ready = threading.Event()
         self._running = True
@@ -185,7 +185,7 @@ class GameHost:
             # Send lobby info
             await send_message(writer, {
                 "msg": "lobby_info",
-                "client_team": self._client_team,
+                "client_player_id": self._client_player_id,
                 "host_name": self._host_name,
             })
 
@@ -223,8 +223,8 @@ class GameHost:
                 cmd_data = msg.get("command", "")
                 try:
                     cmd = GameCommand.deserialize(cmd_data)
-                    # Force team to client's team for security
-                    cmd.team = self._client_team
+                    # Force player_id to client's slot for security
+                    cmd.player_id = self._client_player_id
                     self._inbound_commands.put(cmd)
                 except Exception:
                     pass

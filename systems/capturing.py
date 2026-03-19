@@ -9,12 +9,13 @@ from config.settings import METAL_SPOT_CAPTURE_RADIUS
 
 import math
 
-def capture_step(entities: list[Entity], command_centers: list[CommandCenter], units: list[Unit], metal_spots: list[MetalSpot], metal_extractors: list[MetalExtractor], dt: float, stats=None, grid=None):
+def capture_step(entities: list[Entity], command_centers: list[CommandCenter], units: list[Unit], metal_spots: list[MetalSpot], metal_extractors: list[MetalExtractor], dt: float, stats=None, grid=None, teams=None):
+    all_teams = sorted(teams) if teams else [1, 2]
     cap_radius_sq = METAL_SPOT_CAPTURE_RADIUS * METAL_SPOT_CAPTURE_RADIUS
     for metal_spot in metal_spots:
         if metal_spot.owner is not None:
             continue
-        unit_difference = 0
+        team_counts: dict[int, float] = {t: 0.0 for t in all_teams}
         sx, sy = metal_spot.center()
         nearby = grid.get_units_exact(sx, sy, METAL_SPOT_CAPTURE_RADIUS) if grid is not None else units
         for unit in nearby:
@@ -24,29 +25,32 @@ def capture_step(entities: list[Entity], command_centers: list[CommandCenter], u
             dy = unit.y - sy
             if dx * dx + dy * dy > cap_radius_sq:
                 continue
-            weight = 0.3 if unit.unit_type == "scout" else 1
-            if unit.team == 1:
-                unit_difference += weight
-            elif unit.team == 2:
-                unit_difference -= weight
+            if unit.team not in team_counts:
+                continue
+            weight = 0.3 if unit.unit_type == "scout" else 1.0
+            team_counts[unit.team] += weight
+
+        # unit_difference: positive = all_teams[0] leads, negative = all_teams[1] leads
+        if len(all_teams) >= 2:
+            unit_difference = team_counts[all_teams[0]] - team_counts[all_teams[1]]
+        else:
+            unit_difference = team_counts[all_teams[0]] if all_teams else 0.0
+
         metal_spot.update_progress(unit_difference, dt)
+
+        def _claim_for(claiming_team: int):
+            metal_spot.claim(claiming_team)
+            metal_extractor = MetalExtractor(metal_spot=metal_spot, team=claiming_team)
+            entities.append(metal_extractor)
+            metal_extractors.append(metal_extractor)
+            # Give the spawn bonus to ALL living CCs on the claiming team equally
+            for cc in command_centers:
+                if cc.team == claiming_team and cc.alive:
+                    cc.metal_extractors.append(metal_extractor)
+            if stats is not None:
+                stats.record_capture(claiming_team)
+
         if metal_spot.capture_progress >= 1.0:
-            metal_spot.claim(1)
-            metal_extractor = MetalExtractor(metal_spot=metal_spot, team=1)
-            entities.append(metal_extractor)
-            metal_extractors.append(metal_extractor)
-            cc = next((c for c in command_centers if c.team == 1), None)
-            if cc is not None:
-                cc.metal_extractors.append(metal_extractor)
-            if stats is not None:
-                stats.record_capture(1)
-        elif metal_spot.capture_progress <= -1.0:
-            metal_spot.claim(2)
-            metal_extractor = MetalExtractor(metal_spot=metal_spot, team=2)
-            entities.append(metal_extractor)
-            metal_extractors.append(metal_extractor)
-            cc = next((c for c in command_centers if c.team == 2), None)
-            if cc is not None:
-                cc.metal_extractors.append(metal_extractor)
-            if stats is not None:
-                stats.record_capture(2)
+            _claim_for(all_teams[0])
+        elif metal_spot.capture_progress <= -1.0 and len(all_teams) >= 2:
+            _claim_for(all_teams[1])

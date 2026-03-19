@@ -106,7 +106,7 @@ class KiteBot(BaseAI):
 
     def _rally_point(self, cc):
         """60px from CC toward own side (team 1 left, team 2 right)."""
-        direction = -1 if self._team == 1 else 1
+        direction = -1 if (cc and cc.x < self.bounds[0] / 2) else 1
         return (cc.x + direction * 60, cc.y)
 
     @staticmethod

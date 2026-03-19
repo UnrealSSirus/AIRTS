@@ -13,6 +13,13 @@ from ui.widgets import Button, ToggleGroup, LineGraph, _get_font
 from config.unit_types import UNIT_TYPES
 from config.settings import METAL_EXTRACTOR_SPAWN_BONUS
 
+# Player colour dots (matches lobby palette)
+_PLAYER_COLORS = [
+    (80,  140, 255), (80,  220, 160), (255,  80,  80), (255, 160,  60),
+    (180,  80, 220), (80,  220, 220), (220, 220,  80), (220,  80, 160),
+]
+_BADGE_ROW_H = 20  # height added to tab/graph offset when badges are shown
+
 # Tab definitions: (value, label)
 _TABS = [
     ("cc_health", "CC HP"),
@@ -38,6 +45,63 @@ _BAR_T1_COLOR = (60, 130, 255)
 _BAR_T2_COLOR = (235, 65, 65)
 _BAR_BORDER_T1 = (90, 160, 255)
 _BAR_BORDER_T2 = (255, 100, 100)
+
+
+def _compress_build_order(bo: list[dict]) -> list[dict]:
+    """Two-level compression of a build order list.
+
+    Level 1 — same-tick, same-type entries → one entry with ``spawn_count``
+               (handles units like scouts that produce 3 per spawn cycle).
+    Level 2 — consecutive events of the same type and spawn_count → ``run_count``
+               (e.g. four scout batches in a row: Scout (x3) x4).
+
+    Output entries have keys: unit_type, tick, spawn_count, run_count.
+    """
+    if not bo:
+        return []
+
+    # Level 1: group same-tick same-type
+    events: list[dict] = []
+    i = 0
+    while i < len(bo):
+        entry = bo[i]
+        tick = entry.get("tick", 0)
+        ut = entry.get("unit_type", "")
+        j = i + 1
+        while j < len(bo) and bo[j].get("tick") == tick and bo[j].get("unit_type") == ut:
+            j += 1
+        events.append({"unit_type": ut, "tick": tick, "spawn_count": j - i})
+        i = j
+
+    # Level 2: group consecutive same-type, same-spawn-count
+    result: list[dict] = []
+    i = 0
+    while i < len(events):
+        ev = events[i]
+        ut = ev["unit_type"]
+        sc = ev["spawn_count"]
+        j = i + 1
+        while j < len(events) and events[j]["unit_type"] == ut and events[j]["spawn_count"] == sc:
+            j += 1
+        result.append({"unit_type": ut, "tick": ev["tick"],
+                        "spawn_count": sc, "run_count": j - i})
+        i = j
+    return result
+
+
+def _build_order_label(entry: dict) -> str:
+    """Format a compressed build order entry as a display string."""
+    ut = entry.get("unit_type", "soldier") if isinstance(entry, dict) else "soldier"
+    name = ut.replace("_", " ").title()
+    sc = entry.get("spawn_count", 1) if isinstance(entry, dict) else 1
+    rc = entry.get("run_count", 1) if isinstance(entry, dict) else 1
+    if sc > 1 and rc > 1:
+        return f"{name} (x{sc}) x{rc}"
+    elif sc > 1:
+        return f"{name} (x{sc})"
+    elif rc > 1:
+        return f"{name} x{rc}"
+    return name
 
 
 def _ease_out_cubic(t: float) -> float:
@@ -85,15 +149,23 @@ class ResultsScreen(BaseScreen):
                  winner: int = 0, human_teams: set[int] | None = None,
                  stats: dict | None = None,
                  replay_filepath: str | None = None,
-                 team_names: dict[int, str] | None = None):
+                 team_names: dict[int, str] | None = None,
+                 player_names: dict[int, str] | None = None,
+                 player_team: dict[int, int] | None = None):
         super().__init__(screen, clock)
         self._winner = winner
         self._human_teams = human_teams or set()
         self._stats = stats  # the full stats dict from GameStats.finalize()
         self._replay_filepath = replay_filepath
         self._team_names = team_names or {}
+        self._player_names = player_names or {}
+        self._player_team = player_team or {}
         self._name1 = self._team_names.get(1, "Team 1")
         self._name2 = self._team_names.get(2, "Team 2")
+
+        # Badge row: show when 3+ players (shifts tab/graph down)
+        self._show_badges = len(self._player_names) >= 3
+        badge_offset = _BADGE_ROW_H if self._show_badges else 0
 
         # Buttons — three centered side by side at bottom
         btn_w = 240
@@ -124,10 +196,13 @@ class ResultsScreen(BaseScreen):
             total_tabs = len(tab_options)
             tab_w = min(90, (self.width - 40) // total_tabs - 2)
             tab_x = (self.width - total_tabs * (tab_w + 2)) // 2
-            self._tabs = ToggleGroup(tab_x, 90, tab_options,
+            tab_y = 90 + badge_offset
+            self._tabs = ToggleGroup(tab_x, tab_y, tab_options,
                                      selected_index=0, btn_w=tab_w, btn_h=28)
 
-            self._graph = LineGraph(30, 125, self.width - 60, 340,
+            graph_y = 125 + badge_offset
+            graph_h = 340 - badge_offset
+            self._graph = LineGraph(30, graph_y, self.width - 60, graph_h,
                                     color1=GRAPH_LINE_T1, color2=GRAPH_LINE_T2)
             self._update_graph()
 
@@ -218,18 +293,13 @@ class ResultsScreen(BaseScreen):
         pygame.display.flip()
 
     def _header_text(self) -> str:
-        """Return header string: 'Draw', '<Name> Victory', or '<Name> Defeat'."""
+        """Return header string: 'Draw', 'Team X Victory', or 'Defeat'."""
         if self._winner == -1:
             return "Draw"
-        winner_name = self._team_names.get(self._winner, f"Team {self._winner}")
-        if self._winner in self._human_teams:
-            return f"{winner_name} Victory"
-        if self._human_teams:
-            human_team = next(iter(self._human_teams))
-            human_name = self._team_names.get(human_team, f"Team {human_team}")
-            return f"{human_name} Defeat"
-        # AI vs AI
-        return f"{winner_name} Victory"
+        winner_label = f"Team {self._winner}"
+        if self._human_teams and self._winner not in self._human_teams:
+            return "Defeat"
+        return f"{winner_label} Victory"
 
     def _draw_simple_view(self):
         """Fallback when no stats available."""
@@ -314,6 +384,10 @@ class ResultsScreen(BaseScreen):
             self.screen.blit(s2_surf,
                              (self.width - _BAR_PAD_X - s2_surf.get_width() - 10, s2_y))
 
+        # -- Player badges (shown when 3+ players) --
+        if self._show_badges:
+            self._draw_player_badges()
+
         # -- Tab bar --
         self._tabs.draw(self.screen)
 
@@ -323,60 +397,108 @@ class ResultsScreen(BaseScreen):
         else:
             self._graph.draw(self.screen)
 
+    def _draw_player_badges(self):
+        """Draw a row of colored dots + player names just below the score bars."""
+        badge_y = _BAR_Y + _BAR_HEIGHT + 4
+        font = _get_font(14)
+        cx = self.width // 2
+
+        # Group players by team
+        t1_pids = sorted(pid for pid, t in self._player_team.items() if t == 1)
+        t2_pids = sorted(pid for pid, t in self._player_team.items() if t == 2)
+
+        def _draw_group(pids: list[int], start_x: int, direction: int):
+            """Draw badges starting at start_x, moving in direction (+1=right, -1=left)."""
+            x = start_x
+            for pid in pids:
+                name = self._player_names.get(pid, f"P{pid}")
+                color = _PLAYER_COLORS[(pid - 1) % len(_PLAYER_COLORS)]
+                dot_r = 5
+                dot_cx = x + dot_r if direction > 0 else x - dot_r
+                dot_cy = badge_y + dot_r
+                pygame.draw.circle(self.screen, color, (dot_cx, dot_cy), dot_r)
+                name_surf = font.render(name, True, (180, 180, 200))
+                name_x = dot_cx + dot_r + 3 if direction > 0 else dot_cx - dot_r - 3 - name_surf.get_width()
+                self.screen.blit(name_surf, (name_x, dot_cy - name_surf.get_height() // 2))
+                item_w = dot_r * 2 + 4 + name_surf.get_width() + 10
+                x += item_w * direction
+
+        # Team 1 badges on left, team 2 on right
+        _draw_group(t1_pids, _BAR_PAD_X, 1)
+        _draw_group(list(reversed(t2_pids)), self.width - _BAR_PAD_X, -1)
+
     def _draw_build_order_tab(self):
-        """Draw two-column scrollable build order within the graph area."""
-        # Use same area as graph
+        """Draw multi-column scrollable build order within the graph area.
+
+        One column per player.  New replays include player_id on each entry so
+        teammates' builds are separated.  Old replays (no player_id) fall back
+        to one column per team.  Uses two-level compression: same-tick batches
+        become spawn_count, consecutive repeats become run_count.
+        """
         area = self._graph.rect
         ax, ay, aw, ah = area.x, area.y, area.w, area.h
 
-        # Background
         pygame.draw.rect(self.screen, (20, 20, 32), area, border_radius=4)
         pygame.draw.rect(self.screen, (40, 40, 55), area, 1, border_radius=4)
 
         final = self._stats.get("final", {})
-        bo1 = final.get("1", {}).get("build_order", [])
-        bo2 = final.get("2", {}).get("build_order", [])
 
+        # Collect all raw entries, grouped by player_id when available
+        player_raw: dict[int, list[dict]] = {}
+        has_player_ids = False
+        for team_key in sorted(final.keys(), key=lambda k: int(k)):
+            team_id = int(team_key)
+            for entry in final.get(team_key, {}).get("build_order", []):
+                if not isinstance(entry, dict):
+                    continue
+                if "player_id" in entry:
+                    has_player_ids = True
+                key = entry["player_id"] if "player_id" in entry else team_id
+                player_raw.setdefault(key, []).append(entry)
+
+        # Build columns ordered by player_id (or team_id for old data)
+        columns: list[tuple[str, list[dict], tuple]] = []
+        for pid in sorted(player_raw):
+            bo = _compress_build_order(player_raw[pid])
+            color = _PLAYER_COLORS[(pid - 1) % len(_PLAYER_COLORS)]
+            if has_player_ids and self._player_names:
+                header = self._player_names.get(pid, f"P{pid}")
+            else:
+                header = self._team_names.get(pid, f"Team {pid}")
+            columns.append((header, bo, color))
+
+        n_cols = max(2, len(columns))
+        col_w = aw // n_cols
         font = _get_font(14)
         row_h = 18
         r = BUILD_ORDER_RADIUS
         pad_x = 12
         pad_y = 8
-        col_w = aw // 2
 
-        # Clip to graph area
         clip_rect = pygame.Rect(ax, ay, aw, ah)
         old_clip = self.screen.get_clip()
         self.screen.set_clip(clip_rect)
 
-        # Column headers
         hdr_y = ay + pad_y - self._build_scroll
         hdr_font = _get_font(16)
-        h1 = hdr_font.render(self._name1, True, GRAPH_LINE_T1)
-        h2 = hdr_font.render(self._name2, True, GRAPH_LINE_T2)
-        self.screen.blit(h1, (ax + pad_x, hdr_y))
-        self.screen.blit(h2, (ax + col_w + pad_x, hdr_y))
 
-        start_y = hdr_y + row_h + 4
+        for ci, (col_name, bo, color) in enumerate(columns):
+            col_x = ax + ci * col_w
+            hdr_surf = hdr_font.render(col_name, True, color)
+            self.screen.blit(hdr_surf, (col_x + pad_x, hdr_y))
 
-        def _draw_column(entries: list, col_x: int, color: tuple):
-            for i, entry in enumerate(entries):
+            start_y = hdr_y + row_h + 4
+            for i, entry in enumerate(bo):
                 ey = start_y + i * row_h
                 if ey + row_h < ay or ey > ay + ah:
-                    continue  # clipped
-                cx = col_x + pad_x + r
-                cy = ey + row_h // 2
-                pygame.draw.circle(self.screen, color, (cx, cy), r)
-                ut = entry.get("unit_type", "soldier") if isinstance(entry, dict) else "soldier"
-                name = ut.replace("_", " ").title()
-                name_surf = font.render(name, True, (200, 200, 220))
-                self.screen.blit(name_surf, (cx + r + 6, cy - name_surf.get_height() // 2))
+                    continue
+                ecx = col_x + pad_x + r
+                ecy = ey + row_h // 2
+                pygame.draw.circle(self.screen, color, (ecx, ecy), r)
+                name_surf = font.render(_build_order_label(entry), True, (200, 200, 220))
+                self.screen.blit(name_surf, (ecx + r + 6, ecy - name_surf.get_height() // 2))
 
-        _draw_column(bo1, ax, GRAPH_LINE_T1)
-        _draw_column(bo2, ax + col_w, GRAPH_LINE_T2)
-
-        # Clamp scroll to content
-        max_rows = max(len(bo1), len(bo2))
+        max_rows = max((len(bo) for _, bo, _ in columns), default=0)
         max_scroll = max(0, (max_rows * row_h + pad_y + row_h + 4) - ah)
         self._build_scroll = min(self._build_scroll, max_scroll)
 

@@ -1,45 +1,77 @@
-"""Create-lobby screen — mode toggle, team columns, AI pickers, map settings."""
+"""Create-lobby screen — two-column layout: player list (left), settings (right).
+Supports up to 8 player slots with per-slot team assignment.
+"""
 from __future__ import annotations
 import json
 import os
+from dataclasses import dataclass
 import pygame
 from screens.base import BaseScreen, ScreenResult
 from ui.theme import (
     MENU_BG, CONTENT_TEXT, HEADING_FONT_SIZE, CONTENT_FONT_SIZE,
-    BTN_WIDTH, BTN_HEIGHT, DD_WIDTH, DD_BG, DD_BORDER, DD_TEXT,
-    DD_HEIGHT, DD_FONT_SIZE,
+    BTN_WIDTH, BTN_HEIGHT, DD_HEIGHT, DD_FONT_SIZE,
 )
 from ui.widgets import (
     Button, BackButton, Dropdown, Slider, ToggleGroup, TextInput, Checkbox,
     _get_font,
 )
 
-# Team colour indicators (matching in-game palette)
-_T1_COLOR = (80, 140, 255)
-_T2_COLOR = (255, 80, 80)
+# Player colour indicators — 8 distinct colours (matching in-game PLAYER_COLORS palette)
+_PLAYER_COLORS = [
+    (80,  140, 255),   # P1 blue
+    (80,  220, 160),   # P2 teal
+    (255,  80,  80),   # P3 red
+    (255, 160,  60),   # P4 orange
+    (180,  80, 220),   # P5 purple
+    (80,  220, 220),   # P6 cyan
+    (220, 220,  80),   # P7 yellow
+    (220,  80, 160),   # P8 pink
+]
 
-# Horizontal column centres (computed dynamically from screen width)
-_COL1_CX = 200  # default, overridden per-instance
-_COL2_CX = 600  # default, overridden per-instance
+_HUMAN_CHOICE = ("human", "Human")
 
-# Map size presets: (label, width, height)
+# Map size presets
 _MAP_PRESETS = [
-    ("small", "Small"),
+    ("small",  "Small"),
     ("medium", "Medium"),
-    ("large", "Large"),
+    ("large",  "Large"),
 ]
 _MAP_SIZES = {
-    "small": (800, 600),
+    "small":  (800,  600),
     "medium": (1200, 800),
-    "large": (1800, 1200),
+    "large":  (1800, 1200),
 }
 
-# Settings file path (next to the executable / project root)
-_SETTINGS_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "lobby_settings.json")
+_SETTINGS_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)), "lobby_settings.json"
+)
+
+_MAX_SLOTS = 8
+_MIN_SLOTS = 2
+
+# Slot row dimensions
+_SLOT_ROW_H   = 38   # height per player row
+_AI_DD_W      = 155  # AI / Human dropdown width
+_TEAM_DD_W    = 72   # Team dropdown width
+_REMOVE_BTN_W = 26   # × button size
+
+# Panel visual constants
+_PANEL_BG     = (18, 18, 28)
+_PANEL_BORDER = (42, 42, 62)
+_HDR_COLOR    = (160, 160, 185)   # subdued column-header colour
+_DIVIDER_CLR  = (35, 35, 52)
+
+_TEAM_CHOICES = [("1", "Team 1"), ("2", "Team 2")]
+
+# Vertical layout constants (relative to top of screen)
+_TITLE_Y      = 16
+_PANEL_TOP_Y  = 56   # top of both panel rectangles
+_PANEL_HDR_Y  = 64   # "Players" / "Settings" header text y
+_COL_HDR_Y    = 86   # "AI / Human" and "Team" column header y
+_SLOT_Y_START = 104  # y of first slot row
 
 
 def _load_settings() -> dict:
-    """Load saved lobby settings from disk, or return empty dict."""
     try:
         with open(_SETTINGS_PATH, "r") as f:
             return json.load(f)
@@ -48,7 +80,6 @@ def _load_settings() -> dict:
 
 
 def _save_settings(settings: dict):
-    """Persist lobby settings to disk."""
     try:
         with open(_SETTINGS_PATH, "w") as f:
             json.dump(settings, f, indent=2)
@@ -56,104 +87,107 @@ def _save_settings(settings: dict):
         pass
 
 
+@dataclass
+class _Slot:
+    pid: int
+    ai_dd: Dropdown
+    team_dd: Dropdown
+    remove_btn: Button
+
+
 class CreateLobbyScreen(BaseScreen):
-    """Configure game mode, AIs, and map settings, then start."""
+    """Configure game format, AIs, and map settings, then start."""
 
     def __init__(self, screen: pygame.Surface, clock: pygame.time.Clock,
                  ai_choices: list[tuple[str, str]]):
         super().__init__(screen, clock)
         self._ai_choices = ai_choices
-        cx = self.width // 2
+        self._full_choices: list[tuple[str, str]] = [_HUMAN_CHOICE] + list(ai_choices)
 
-        # Dynamic column positions based on screen width
-        self._col1_cx = self.width // 4
-        self._col2_cx = self.width * 3 // 4
+        # ── two-column layout ────────────────────────────────────────────────
+        mid = self.width // 2
 
-        # Load saved settings
+        # Left panel: player list
+        self._lp_x = max(16, int(self.width * 0.03))  # panel rect left edge
+        self._lp_w = mid - self._lp_x - 12            # panel rect width
+
+        # Right panel: settings
+        self._rp_x = mid + 12                          # panel rect left edge
+        self._rp_w = self.width - self._rp_x - max(16, int(self.width * 0.03))
+
+        # Slot row element x-positions (within left panel)
+        self._label_x   = self._lp_x + 14             # dot + P# label
+        self._ai_dd_x   = self._label_x + 44          # AI / Human dropdown
+        self._team_dd_x = self._ai_dd_x + _AI_DD_W + 8
+        self._remove_x  = self._team_dd_x + _TEAM_DD_W + 6
+
+        # Right panel content starts here
+        self._rx = self._rp_x + 14
+
+        # ── widgets ─────────────────────────────────────────────────────────
         saved = _load_settings()
 
-        # -- Mode toggle: Human vs AI | AI vs AI ----------------------------
-        mode_index = 1 if saved.get("mode") == "ai_vs_ai" else 0
-        self._mode = ToggleGroup(
-            cx - 145, 80,
-            [
-                ("human_vs_ai", "Human vs AI"),
-                ("ai_vs_ai", "AI vs AI"),
-            ],
-            selected_index=mode_index,
-            btn_w=140,
-            btn_h=32,
-        )
+        self._slots: list[_Slot] = []
+        self._load_slots(saved)
 
-        # Which team the human controls (1 or 2) in human_vs_ai mode
-        self._human_team: int = saved.get("human_team", 1)
-
-        # -- AI dropdowns (one per column) ----------------------------------
-        dd_x1 = self._col1_cx - DD_WIDTH // 2
-        dd_x2 = self._col2_cx - DD_WIDTH // 2
-
-        # Restore saved AI selections
-        t1_idx = self._find_ai_index(saved.get("ai_t1"), ai_choices, 0)
-        t2_idx = self._find_ai_index(saved.get("ai_t2"), ai_choices, 0)
-        self._dd_t1 = Dropdown(dd_x1, 165, DD_WIDTH, ai_choices, t1_idx)
-        self._dd_t2 = Dropdown(dd_x2, 165, DD_WIDTH, ai_choices, t2_idx)
-
-        # -- Player name input (appears on the human side) ------------------
+        # Player name input (shown only when a Human slot exists)
         self._name_input = TextInput(
-            dd_x1, 228, DD_WIDTH,
+            self._ai_dd_x, 0, _AI_DD_W,
             text=saved.get("player_name", ""),
             placeholder="Unnamed Player",
             max_len=24,
         )
 
-        # -- Swap sides button ----------------------------------------------
-        self._swap_btn = Button(cx - 30, 168, 60, 28, "<->", font_size=14)
+        # "+ Add Player" button
+        self._add_btn = Button(self._label_x, 0, 150, 28, "+ Add Player",
+                               font_size=14)
 
-        # -- Map size preset toggle -----------------------------------------
+        # Map size preset toggle
         saved_map = saved.get("map_size", "small")
-        map_idx = next((i for i, (v, _) in enumerate(_MAP_PRESETS) if v == saved_map), 0)
-        sl_x = cx - 110
+        map_idx = next(
+            (i for i, (v, _) in enumerate(_MAP_PRESETS) if v == saved_map), 0
+        )
+        ry = _SLOT_Y_START  # settings content top (aligned with first slot row)
         self._map_size = ToggleGroup(
-            sl_x, 310, _MAP_PRESETS,
-            selected_index=map_idx,
-            btn_w=73,
-            btn_h=28,
+            self._rx, ry + 20, _MAP_PRESETS,
+            selected_index=map_idx, btn_w=73, btn_h=26,
         )
 
-        # -- Obstacles slider (single, sets both min and max) ---------------
-        self._sl_obstacles = Slider(sl_x, 355, 220, "Obstacles", 0, 20,
-                                    saved.get("obstacles", 0), 1)
-
-        # -- Time limit slider ----------------------------------------------
-        self._sl_time_limit = Slider(sl_x, 400, 220, "Time Limit (min, 0=off)",
-                                     0, 60, saved.get("time_limit", 15), 1)
-
-        # -- Save debug summary checkbox ------------------------------------
+        self._sl_obstacles = Slider(
+            self._rx, ry + 72, min(self._rp_w - 20, 220),
+            "Obstacles", 0, 20, saved.get("obstacles", 0), 1,
+        )
+        self._sl_time_limit = Slider(
+            self._rx, ry + 126, min(self._rp_w - 20, 220),
+            "Time Limit (min, 0=off)", 0, 60, saved.get("time_limit", 15), 1,
+        )
         self._debug_summary_cb = Checkbox(
-            sl_x, 445, "Save game summary for debugging",
+            self._rx, ry + 182,
+            "Save game summary for debugging",
             checked=saved.get("save_debug_summary", False),
         )
-
-        # -- Headless checkbox ----------------------------------------------
         self._headless_cb = Checkbox(
-            sl_x, 480, "Headless (no rendering, max speed)",
+            self._rx, ry + 212,
+            "Headless (no rendering, max speed)",
             checked=saved.get("headless", False),
             enabled=False,
         )
 
-        # -- Start button ---------------------------------------------------
+        # Bottom buttons
+        cx = self.width // 2
+        btn_y = self.height - 58
         self._start_btn = Button(
-            cx - BTN_WIDTH // 2, self.height - 80,
-            BTN_WIDTH, BTN_HEIGHT, "Start Game",
+            cx - BTN_WIDTH // 2, btn_y, BTN_WIDTH, BTN_HEIGHT, "Start Game",
         )
         self._back = BackButton()
 
-        self._update_layout()
+        self._rebuild_slot_positions()
+
+    # ── slot helpers ─────────────────────────────────────────────────────────
 
     @staticmethod
     def _find_ai_index(ai_id: str | None, choices: list[tuple[str, str]],
                        default: int) -> int:
-        """Find the index of an AI id in the choices list."""
         if ai_id is None:
             return default
         for i, (val, _) in enumerate(choices):
@@ -161,45 +195,97 @@ class CreateLobbyScreen(BaseScreen):
                 return i
         return default
 
-    # -- layout helpers -----------------------------------------------------
+    def _slot_y(self, idx: int) -> int:
+        return _SLOT_Y_START + idx * _SLOT_ROW_H
 
-    def _update_layout(self):
-        """Show/hide widgets and reposition name input based on mode + human side."""
-        mode = self._mode.value
-        dd_x1 = self._col1_cx - DD_WIDTH // 2
-        dd_x2 = self._col2_cx - DD_WIDTH // 2
+    def _make_slot(self, pid: int, ai_id: str, team_id: int, idx: int) -> _Slot:
+        y = self._slot_y(idx)
+        ai_idx = self._find_ai_index(ai_id, self._full_choices, 0)
+        team_idx = 0 if team_id == 1 else 1
+        ai_dd = Dropdown(self._ai_dd_x, y, _AI_DD_W, self._full_choices, ai_idx)
+        team_dd = Dropdown(self._team_dd_x, y, _TEAM_DD_W, _TEAM_CHOICES, team_idx)
+        remove_btn = Button(
+            self._remove_x,
+            y + (DD_HEIGHT - _REMOVE_BTN_W) // 2,
+            _REMOVE_BTN_W, _REMOVE_BTN_W, "×",
+        )
+        return _Slot(pid=pid, ai_dd=ai_dd, team_dd=team_dd, remove_btn=remove_btn)
 
-        if mode == "human_vs_ai":
-            if self._human_team == 1:
-                self._dd_t1.visible = False
-                self._dd_t2.visible = True
-                self._name_input.rect.x = dd_x1
-            else:
-                self._dd_t1.visible = True
-                self._dd_t2.visible = False
-                self._name_input.rect.x = dd_x2
-            self._name_input.visible = True
-            self._headless_cb.enabled = False
+    def _rebuild_slot_positions(self):
+        for idx, slot in enumerate(self._slots):
+            y = self._slot_y(idx)
+            slot.ai_dd.x = self._ai_dd_x
+            slot.ai_dd.y = y
+            slot.team_dd.x = self._team_dd_x
+            slot.team_dd.y = y
+            slot.remove_btn.rect.x = self._remove_x
+            slot.remove_btn.rect.y = y + (DD_HEIGHT - _REMOVE_BTN_W) // 2
+
+        # Add button just below the last slot row
+        n = len(self._slots)
+        self._add_btn.rect.y = self._slot_y(n) + 5
+        self._add_btn.rect.x = self._label_x
+        self._add_btn.enabled = n < _MAX_SLOTS
+
+        self._update_name_input_pos()
+
+    def _update_name_input_pos(self):
+        n = len(self._slots)
+        below = self._slot_y(n) + 8
+        if n < _MAX_SLOTS:                    # add button is visible
+            below = max(below, self._slot_y(n) + 5 + 32)
+        self._name_input.rect.x = self._ai_dd_x
+        self._name_input.rect.y = below
+
+        has_human = any(s.ai_dd.value == "human" for s in self._slots)
+        self._name_input.visible = has_human
+        self._headless_cb.enabled = not has_human
+        if has_human:
             self._headless_cb.checked = False
+
+    def _load_slots(self, saved: dict):
+        first_ai = self._ai_choices[0][0] if self._ai_choices else "human"
+        slot_data = saved.get("slots")
+        if slot_data and isinstance(slot_data, list) and len(slot_data) >= _MIN_SLOTS:
+            for i, entry in enumerate(slot_data[:_MAX_SLOTS]):
+                ai_id  = entry.get("ai_id", first_ai)
+                team_id = int(entry.get("team", 1 if i == 0 else 2))
+                self._slots.append(self._make_slot(i + 1, ai_id, team_id, i))
         else:
-            # AI vs AI — both dropdowns, no name input
-            self._dd_t1.visible = True
-            self._dd_t2.visible = True
-            self._name_input.visible = False
-            self._headless_cb.enabled = True
+            # Legacy fallback
+            fmt = saved.get("format", "1v1")
+            if fmt == "2v2":
+                pairs = [
+                    (saved.get("ai_p1", "human"), 1),
+                    (saved.get("ai_p2", first_ai), 1),
+                    (saved.get("ai_p3", first_ai), 2),
+                    (saved.get("ai_p4", first_ai), 2),
+                ]
+                for i, (ai_id, team_id) in enumerate(pairs):
+                    self._slots.append(self._make_slot(i + 1, ai_id, team_id, i))
+            else:
+                p1 = saved.get("ai_p1", "human")
+                p2 = saved.get("ai_p3", first_ai)
+                self._slots.append(self._make_slot(1, p1, 1, 0))
+                self._slots.append(self._make_slot(2, p2, 2, 1))
 
-    def _swap_sides(self):
-        """Exchange the two team configurations."""
-        # Swap AI dropdown selections
-        idx1 = self._dd_t1.selected_index
-        idx2 = self._dd_t2.selected_index
-        self._dd_t1.selected_index = idx2
-        self._dd_t2.selected_index = idx1
-        # Toggle which side is human
-        self._human_team = 3 - self._human_team
-        self._update_layout()
+    def _add_slot(self):
+        if len(self._slots) >= _MAX_SLOTS:
+            return
+        first_ai = self._ai_choices[0][0] if self._ai_choices else "human"
+        idx = len(self._slots)
+        self._slots.append(self._make_slot(idx + 1, first_ai, 2, idx))
+        self._rebuild_slot_positions()
 
-    # -- event loop ---------------------------------------------------------
+    def _remove_slot(self, slot: _Slot):
+        if len(self._slots) <= _MIN_SLOTS:
+            return
+        self._slots.remove(slot)
+        for i, s in enumerate(self._slots):
+            s.pid = i + 1
+        self._rebuild_slot_positions()
+
+    # ── event loop ───────────────────────────────────────────────────────────
 
     def run(self) -> ScreenResult:
         while True:
@@ -209,24 +295,45 @@ class CreateLobbyScreen(BaseScreen):
                 if self._back.handle_event(event):
                     return ScreenResult("main_menu")
 
-                # Text input gets priority for keyboard events
                 if self._name_input.handle_event(event):
                     continue
 
-                if self._mode.handle_event(event):
+                if self._add_btn.handle_event(event):
                     self._name_input.active = False
-                    self._update_layout()
-                    self._dd_t1.open = False
-                    self._dd_t2.open = False
+                    self._add_slot()
+                    continue
 
-                if self._swap_btn.handle_event(event):
+                removed = None
+                for slot in self._slots:
+                    if slot.remove_btn.handle_event(event):
+                        removed = slot
+                        break
+                if removed is not None:
                     self._name_input.active = False
-                    self._swap_sides()
-                    self._dd_t1.open = False
-                    self._dd_t2.open = False
+                    self._remove_slot(removed)
+                    continue
 
-                self._dd_t1.handle_event(event)
-                self._dd_t2.handle_event(event)
+                changed = False
+                for slot in self._slots:
+                    if slot.ai_dd.handle_event(event):
+                        self._name_input.active = False
+                        for s in self._slots:
+                            if s is not slot:
+                                s.ai_dd.open = False
+                                s.team_dd.open = False
+                        self._update_name_input_pos()
+                        changed = True
+                        break
+                    if slot.team_dd.handle_event(event):
+                        self._name_input.active = False
+                        for s in self._slots:
+                            if s is not slot:
+                                s.ai_dd.open = False
+                                s.team_dd.open = False
+                        changed = True
+                        break
+                if changed:
+                    continue
 
                 self._map_size.handle_event(event)
                 self._sl_obstacles.handle_event(event)
@@ -241,15 +348,15 @@ class CreateLobbyScreen(BaseScreen):
             self._draw()
             self.clock.tick(60)
 
-    # -- settings persistence -----------------------------------------------
+    # ── persistence ───────────────────────────────────────────────────────────
 
     def _persist_settings(self):
-        """Save current lobby settings to disk."""
+        slots_data = [
+            {"ai_id": s.ai_dd.value, "team": int(s.team_dd.value)}
+            for s in self._slots
+        ]
         _save_settings({
-            "mode": self._mode.value,
-            "human_team": self._human_team,
-            "ai_t1": self._dd_t1.value,
-            "ai_t2": self._dd_t2.value,
+            "slots": slots_data,
             "player_name": self._name_input.text.strip(),
             "map_size": self._map_size.value,
             "obstacles": self._sl_obstacles.value,
@@ -258,96 +365,103 @@ class CreateLobbyScreen(BaseScreen):
             "headless": self._headless_cb.checked,
         })
 
-    # -- result builder -----------------------------------------------------
+    # ── result builder ────────────────────────────────────────────────────────
 
     def _build_result(self) -> ScreenResult:
-        mode = self._mode.value
-        team_ai: dict[int, str] = {}
-
-        if mode == "human_vs_ai":
-            ai_team = 3 - self._human_team
-            if ai_team == 1:
-                team_ai[1] = self._dd_t1.value
-            else:
-                team_ai[2] = self._dd_t2.value
-        elif mode == "ai_vs_ai":
-            team_ai[1] = self._dd_t1.value
-            team_ai[2] = self._dd_t2.value
+        player_ai_ids: dict[int, str] = {}
+        player_team:   dict[int, int] = {}
+        for i, slot in enumerate(self._slots):
+            pid = i + 1
+            player_team[pid] = int(slot.team_dd.value)
+            if slot.ai_dd.value != "human":
+                player_ai_ids[pid] = slot.ai_dd.value
 
         player_name = self._name_input.text.strip() or "Unnamed Player"
-
-        # Resolve map size from preset
         map_w, map_h = _MAP_SIZES[self._map_size.value]
-
         obs_val = self._sl_obstacles.value
 
         return ScreenResult("game", data={
-            "team_ai_ids": team_ai,
-            "player_name": player_name,
-            "width": map_w,
-            "height": map_h,
+            "player_ai_ids": player_ai_ids,
+            "player_team":   player_team,
+            "player_name":   player_name,
+            "width":         map_w,
+            "height":        map_h,
             "obstacle_count": (obs_val, obs_val),
-            "time_limit": self._sl_time_limit.value,
+            "time_limit":    self._sl_time_limit.value,
             "save_debug_summary": self._debug_summary_cb.checked,
-            "headless": self._headless_cb.checked,
+            "headless":      self._headless_cb.checked,
         })
 
-    # -- rendering ----------------------------------------------------------
-
-    def _draw_human_box(self, col_cx: int):
-        """Draw the locked 'Human' indicator box on one column."""
-        font = _get_font(DD_FONT_SIZE)
-        hx = col_cx - DD_WIDTH // 2
-        hy = 165
-        hr = pygame.Rect(hx, hy, DD_WIDTH, DD_HEIGHT)
-        pygame.draw.rect(self.screen, DD_BG, hr, border_radius=4)
-        pygame.draw.rect(self.screen, DD_BORDER, hr, 1, border_radius=4)
-        text = font.render("Human", True, DD_TEXT)
-        self.screen.blit(text, (hr.x + 8, hr.centery - text.get_height() // 2))
+    # ── rendering ─────────────────────────────────────────────────────────────
 
     def _draw(self):
         self.screen.fill(MENU_BG)
         self._back.draw(self.screen)
 
-        # Title
         font_h = pygame.font.SysFont(None, HEADING_FONT_SIZE)
-        title = font_h.render("Create Lobby", True, CONTENT_TEXT)
-        self.screen.blit(title, (self.width // 2 - title.get_width() // 2, 30))
+        font   = _get_font(CONTENT_FONT_SIZE + 2)
+        small  = _get_font(DD_FONT_SIZE)
+        tiny   = _get_font(13)
 
-        # Mode toggle
-        self._mode.draw(self.screen)
+        # ── title ────────────────────────────────────────────────────────────
+        title_surf = font_h.render("Create Lobby", True, CONTENT_TEXT)
+        self.screen.blit(title_surf,
+                         (self.width // 2 - title_surf.get_width() // 2, _TITLE_Y))
 
-        # -- Team column headers with colour dots ---------------------------
-        font = _get_font(CONTENT_FONT_SIZE + 2)
+        # ── panel backgrounds ─────────────────────────────────────────────────
+        panel_h = self.height - _PANEL_TOP_Y - 68  # leave room for Start button
+        lp_rect = pygame.Rect(self._lp_x, _PANEL_TOP_Y, self._lp_w, panel_h)
+        rp_rect = pygame.Rect(self._rp_x, _PANEL_TOP_Y, self._rp_w, panel_h)
+        for r in (lp_rect, rp_rect):
+            pygame.draw.rect(self.screen, _PANEL_BG,     r, border_radius=8)
+            pygame.draw.rect(self.screen, _PANEL_BORDER, r, 1, border_radius=8)
 
-        t1_surf = font.render("Team 1", True, CONTENT_TEXT)
-        t1_x = self._col1_cx - t1_surf.get_width() // 2
-        pygame.draw.circle(self.screen, _T1_COLOR, (t1_x - 12, 140), 5)
-        self.screen.blit(t1_surf, (t1_x, 132))
+        # ── left panel: Players ───────────────────────────────────────────────
+        players_hdr = font.render("Players", True, CONTENT_TEXT)
+        self.screen.blit(players_hdr, (self._lp_x + 14, _PANEL_HDR_Y))
 
-        t2_surf = font.render("Team 2", True, CONTENT_TEXT)
-        t2_x = self._col2_cx - t2_surf.get_width() // 2
-        pygame.draw.circle(self.screen, _T2_COLOR, (t2_x - 12, 140), 5)
-        self.screen.blit(t2_surf, (t2_x, 132))
+        # Column headers
+        team_hdr = tiny.render("Team", True, _HDR_COLOR)
+        self.screen.blit(team_hdr, (self._team_dd_x + 14, _COL_HDR_Y))
 
-        # -- Human locked box (only in human_vs_ai) -------------------------
-        mode = self._mode.value
-        if mode == "human_vs_ai":
-            human_cx = self._col1_cx if self._human_team == 1 else self._col2_cx
-            self._draw_human_box(human_cx)
+        # Slot rows
+        for slot in self._slots:
+            idx = slot.pid - 1
+            y   = self._slot_y(idx)
+            dot_color = _PLAYER_COLORS[idx % len(_PLAYER_COLORS)]
 
-            # "Name:" label above the text input
-            small_font = _get_font(DD_FONT_SIZE)
-            label = small_font.render("Name:", True, CONTENT_TEXT)
-            self.screen.blit(label, (self._name_input.rect.x, 210))
+            # Color dot
+            dot_cx = self._label_x + 6
+            pygame.draw.circle(self.screen, dot_color,
+                               (dot_cx, y + DD_HEIGHT // 2), 5)
 
-        # -- Swap button ----------------------------------------------------
-        self._swap_btn.draw(self.screen)
+            # P# label
+            lbl = small.render(f"P{slot.pid}", True, CONTENT_TEXT)
+            self.screen.blit(lbl, (self._label_x + 16,
+                                   y + (DD_HEIGHT - lbl.get_height()) // 2))
 
-        # -- Map settings header --------------------------------------------
-        map_label = font.render("Map Settings", True, CONTENT_TEXT)
-        self.screen.blit(map_label,
-                         (self.width // 2 - map_label.get_width() // 2, 280))
+            # Remove button (only when more than min slots)
+            if len(self._slots) > _MIN_SLOTS:
+                slot.remove_btn.draw(self.screen)
+
+        # Name input
+        if self._name_input.visible:
+            name_lbl = small.render("Your name:", True, CONTENT_TEXT)
+            self.screen.blit(name_lbl, (self._name_input.rect.x,
+                                        self._name_input.rect.y - 18))
+
+        # Add player button
+        if len(self._slots) < _MAX_SLOTS:
+            self._add_btn.draw(self.screen)
+
+        # ── right panel: Settings ─────────────────────────────────────────────
+        settings_hdr = font.render("Settings", True, CONTENT_TEXT)
+        self.screen.blit(settings_hdr, (self._rp_x + 14, _PANEL_HDR_Y))
+
+        # Map size label
+        ry = _SLOT_Y_START
+        map_lbl = small.render("Map Size", True, _HDR_COLOR)
+        self.screen.blit(map_lbl, (self._rx, ry + 4))
 
         self._map_size.draw(self.screen)
         self._sl_obstacles.draw(self.screen)
@@ -355,12 +469,13 @@ class CreateLobbyScreen(BaseScreen):
         self._debug_summary_cb.draw(self.screen)
         self._headless_cb.draw(self.screen)
 
-        # -- Start button ---------------------------------------------------
+        # ── Start button ──────────────────────────────────────────────────────
         self._start_btn.draw(self.screen)
 
-        # -- Overlays (drawn last so they render on top) --------------------
+        # ── overlays (drawn last for z-order) ─────────────────────────────────
         self._name_input.draw(self.screen)
-        self._dd_t1.draw(self.screen)
-        self._dd_t2.draw(self.screen)
+        all_dds = [dd for s in self._slots for dd in (s.ai_dd, s.team_dd)]
+        for dd in sorted(all_dds, key=lambda d: d.open):
+            dd.draw(self.screen)
 
         pygame.display.flip()

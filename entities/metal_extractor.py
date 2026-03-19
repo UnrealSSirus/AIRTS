@@ -4,7 +4,7 @@ from config.settings import (
     METAL_EXTRACTOR_SPAWN_BONUS,
     REINFORCE_BONUS_MULTIPLIER,
     METAL_SPOT_CAPTURE_RADIUS,
-    TEAM1_COLOR, TEAM2_COLOR,
+    TEAM_COLORS, PLAYER_COLORS,
 )
 from entities.unit import Unit
 from entities.metal_spot import MetalSpot
@@ -66,7 +66,7 @@ class MetalExtractor(Unit):
 
     def _draw_plating_arcs(self, surface: pygame.Surface, stacks: int):
         """Draw cardinal plating arcs on the capture radius boundary."""
-        arc_color = TEAM1_COLOR if self.team == 1 else TEAM2_COLOR
+        arc_color = TEAM_COLORS.get(self.team, PLAYER_COLORS[0])
         arc_r = METAL_SPOT_CAPTURE_RADIUS
         rect = pygame.Rect(
             self.x - arc_r, self.y - arc_r,

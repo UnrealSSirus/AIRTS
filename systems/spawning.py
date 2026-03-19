@@ -8,14 +8,14 @@ from config.unit_types import UNIT_TYPES
 def spawn_step(
     entities: list[Entity],
     command_centers: list[CommandCenter],
-    human_teams: set[int],
+    human_players: set[int],
     stats=None,
     tick: int = 0,
     units: list | None = None,
 ):
     """Spawn units from any command center whose timer is ready.
 
-    Newly spawned units belonging to a human team get ``selectable = True``.
+    Newly spawned units belonging to a human player get ``selectable = True``.
     Unit types with ``spawn_count`` produce multiple units per spawn cycle.
     """
     for cc in command_centers:
@@ -25,10 +25,10 @@ def spawn_step(
         count = type_def.get("spawn_count", 1)
         for _ in range(count):
             u = cc.spawn_unit()
-            u.selectable = u.team in human_teams
+            u.selectable = u.player_id in human_players
             entities.append(u)
             if units is not None:
                 units.append(u)
             if stats is not None:
-                stats.record_spawn(u.team, u.unit_type, tick)
+                stats.record_spawn(u.team, u.unit_type, tick, player_id=u.player_id)
         cc.reset_spawn()

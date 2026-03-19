@@ -11,9 +11,25 @@ DEFAULT_COLOR = (255, 255, 255)
 SELECTION_RECT_COLOR = (0, 200, 255)
 SELECTION_FILL_COLOR = (0, 200, 255, 40)
 
-TEAM1_COLOR = (80, 140, 255)
+# Per-player colours (indexed by player_id - 1); supports up to 8 players
+PLAYER_COLORS = [
+    (80,  140, 255),  # P1 blue
+    (80,  220, 160),  # P2 teal
+    (255,  80,  80),  # P3 red
+    (255, 160,  60),  # P4 orange
+    (180,  80, 220),  # P5 purple
+    (80,  220, 220),  # P6 cyan
+    (220, 220,  80),  # P7 yellow
+    (220,  80, 160),  # P8 pink
+]
+
+# Per-team colours used for team-scoped visuals (capture arcs, minimap borders)
+TEAM_COLORS = {1: (80, 140, 255), 2: (255, 80, 80)}
+
+# Backward-compat aliases (metal_spot.py / metal_extractor.py still reference these)
+TEAM1_COLOR = PLAYER_COLORS[0]
 TEAM1_SELECTED_COLOR = (150, 220, 255)
-TEAM2_COLOR = (255, 80, 80)
+TEAM2_COLOR = PLAYER_COLORS[2]
 PATH_COLOR_TEAM1 = (80, 140, 255, 100)
 PATH_DOT_COLOR = (255, 255, 255, 160)
 
@@ -34,10 +50,6 @@ COMMAND_DOT_COLOR = (255, 255, 100)
 PATH_SAMPLE_MIN_DIST = 4.0
 
 # -- laser visuals ----------------------------------------------------------
-UNIT_LASER_COLOR_T1 = (255, 255, 0)
-UNIT_LASER_COLOR_T2 = (255, 255, 0)
-CC_LASER_COLOR_T1 = (180, 220, 255)
-CC_LASER_COLOR_T2 = (255, 180, 180)
 LASER_FLASH_DURATION = 1.0
 
 # -- command center ---------------------------------------------------------
@@ -65,8 +77,6 @@ METAL_SPOT_RADIUS = 5.0
 METAL_SPOT_CAPTURE_RADIUS = 15.0
 METAL_SPOT_CAPTURE_RANGE_COLOR = (180, 180, 60, 30)
 METAL_SPOT_CAPTURE_ARC_WIDTH = 2.0
-METAL_SPOT_CAPTURE_ARC_COLOR_T1 = (80, 140, 255)
-METAL_SPOT_CAPTURE_ARC_COLOR_T2 = (255, 80, 80)
 METAL_SPOT_CAPTURE_RATE = 0.05  # 5% of the spot's capture progress per unit per second
 
 # -- metal extractor --------------------------------------------------------

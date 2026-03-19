@@ -124,7 +124,7 @@ class CowardBot(BaseAI):
             nearest = min(unclaimed, key=lambda s: (s.x - cc.x) ** 2 + (s.y - cc.y) ** 2)
             return (nearest.x, nearest.y)
         # All spots ours — fall back to behind base
-        direction = -1 if self._team == 1 else 1
+        direction = -1 if (cc and cc.x < self.bounds[0] / 2) else 1
         return (cc.x + direction * 60, cc.y)
 
     @staticmethod

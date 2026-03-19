@@ -3,7 +3,11 @@ from __future__ import annotations
 import math
 import pygame
 from screens.base import BaseScreen, ScreenResult
-from screens.results import _draw_3d_bar, _ease_out_cubic, _BAR_T1_COLOR, _BAR_T2_COLOR, _BAR_BORDER_T1, _BAR_BORDER_T2, _BAR_HEIGHT, _BAR_PAD_X, _BAR_GAP, _ANIM_MS
+from screens.results import (_draw_3d_bar, _ease_out_cubic,
+                              _compress_build_order, _build_order_label,
+                              _PLAYER_COLORS as _RES_PLAYER_COLORS,
+                              _BAR_T1_COLOR, _BAR_T2_COLOR, _BAR_BORDER_T1, _BAR_BORDER_T2,
+                              _BAR_HEIGHT, _BAR_PAD_X, _BAR_GAP, _ANIM_MS)
 from systems.replay import ReplayReader
 from config.settings import (
     OBSTACLE_OUTLINE, HEALTH_BAR_WIDTH, HEALTH_BAR_HEIGHT,
@@ -12,11 +16,9 @@ from config.settings import (
     METAL_SPOT_CAPTURE_RANGE_COLOR, METAL_EXTRACTOR_RADIUS,
     CC_HP, METAL_EXTRACTOR_HP,
     METAL_SPOT_CAPTURE_ARC_WIDTH,
-    METAL_SPOT_CAPTURE_ARC_COLOR_T1,
-    METAL_SPOT_CAPTURE_ARC_COLOR_T2,
     METAL_EXTRACTOR_SPAWN_BONUS,
     SELECTED_COLOR, SELECTION_FILL_COLOR, SELECTION_RECT_COLOR,
-    TEAM1_COLOR, TEAM2_COLOR, RANGE_COLOR, MEDIC_HEAL_COLOR,
+    TEAM1_COLOR, TEAM2_COLOR, TEAM_COLORS, RANGE_COLOR, MEDIC_HEAL_COLOR,
     CC_LASER_RANGE,
     CAMERA_ZOOM_STEP, CAMERA_MAX_ZOOM,
 )
@@ -98,23 +100,59 @@ class ReplayPlaybackScreen(BaseScreen):
         self._filepath = filepath
         self._reader = ReplayReader(filepath)
 
-        # Resolve team names from replay config
+        # Resolve team/player names from replay config.
+        # Supports both new format (player_ai_names, player_team) and old format
+        # (team_ai_names, team_ai_ids) so pre-existing replays still load correctly.
         config = self._reader.config
-        human_teams = self._reader.human_teams
-        ai_names = config.get("team_ai_names", {})
-        ai_ids = config.get("team_ai_ids", {})
-        player_name = config.get("player_name", "Player")
-        self._team_names: dict[int, str] = {}
-        for team in [1, 2]:
+        human_teams: set[int] = set(self._reader.human_teams)
+
+        # Accept either key prefix; int-key the dicts for uniform lookup
+        _raw_ai_names = config.get("player_ai_names") or config.get("team_ai_names") or {}
+        _raw_ai_ids   = config.get("player_ai_ids")   or config.get("team_ai_ids")   or {}
+        ai_names = {int(k): v for k, v in _raw_ai_names.items()}
+        ai_ids   = {int(k): v for k, v in _raw_ai_ids.items()}
+        player_name_cfg = config.get("player_name", "Player")
+
+        # player_team maps player_id → team_id (only present in new-format replays)
+        self._player_team: dict[int, int] = {
+            int(k): int(v)
+            for k, v in (config.get("player_team") or {}).items()
+        }
+
+        # Collect all known player IDs
+        all_pids: set[int] = set(ai_names) | set(ai_ids) | set(self._player_team)
+        # Ensure human players appear (for old replays where team_id == player_id)
+        for t in human_teams:
+            all_pids.add(t)
+
+        # Infer missing player→team mappings (old format: team_id == player_id)
+        for pid in sorted(all_pids):
+            if pid not in self._player_team:
+                self._player_team[pid] = pid
+
+        # Build per-player display names
+        self._player_names: dict[int, str] = {}
+        for pid in sorted(all_pids):
+            team = self._player_team.get(pid, pid)
             if team in human_teams:
-                self._team_names[team] = player_name
+                self._player_names[pid] = player_name_cfg
             else:
-                name = ai_names.get(team) or ai_names.get(str(team))
+                name = ai_names.get(pid)
                 if not name:
-                    name = ai_ids.get(team) or ai_ids.get(str(team))
-                    if name:
-                        name = name.replace("_", " ").title()
-                self._team_names[team] = name or f"Team {team}"
+                    aid = ai_ids.get(pid)
+                    name = aid.replace("_", " ").title() if aid else None
+                self._player_names[pid] = name or f"P{pid}"
+
+        # Build per-team display names (join player names with " & ")
+        team_to_pids: dict[int, list[int]] = {}
+        for pid, tid in self._player_team.items():
+            team_to_pids.setdefault(tid, []).append(pid)
+
+        self._team_names: dict[int, str] = {}
+        for tid, pids in team_to_pids.items():
+            names = [self._player_names.get(p, f"P{p}") for p in sorted(pids)]
+            self._team_names[tid] = " & ".join(names) if names else f"Team {tid}"
+
         self._name1 = self._team_names.get(1, "Team 1")
         self._name2 = self._team_names.get(2, "Team 2")
 
@@ -836,11 +874,14 @@ class ReplayPlaybackScreen(BaseScreen):
         pygame.display.flip()
 
     def _draw_build_order_tab(self):
-        """Draw two-column scrollable build order within the graph area."""
+        """Draw multi-column scrollable build order within the graph area.
+
+        One column per player (new replays) or one per team (old replays that
+        lack player_id in build order entries).  Two-level compression applies.
+        """
         area = self._stat_graph.rect
         ax, ay, aw, ah = area.x, area.y, area.w, area.h
 
-        # Background
         pygame.draw.rect(self.screen, (20, 20, 32), area, border_radius=4)
         pygame.draw.rect(self.screen, (40, 40, 55), area, 1, border_radius=4)
 
@@ -848,49 +889,62 @@ class ReplayPlaybackScreen(BaseScreen):
             return
 
         final = self._stats_data["final"]
-        bo1 = final.get("1", {}).get("build_order", [])
-        bo2 = final.get("2", {}).get("build_order", [])
 
+        # Group raw entries by player_id when available, else by team_id
+        player_raw: dict[int, list[dict]] = {}
+        has_player_ids = False
+        for team_key in sorted(final.keys(), key=lambda k: int(k)):
+            team_id = int(team_key)
+            for entry in final.get(team_key, {}).get("build_order", []):
+                if not isinstance(entry, dict):
+                    continue
+                if "player_id" in entry:
+                    has_player_ids = True
+                key = entry["player_id"] if "player_id" in entry else team_id
+                player_raw.setdefault(key, []).append(entry)
+
+        columns: list[tuple[str, list[dict], tuple]] = []
+        for pid in sorted(player_raw):
+            bo = _compress_build_order(player_raw[pid])
+            color = _RES_PLAYER_COLORS[(pid - 1) % len(_RES_PLAYER_COLORS)]
+            if has_player_ids and self._player_names:
+                header = self._player_names.get(pid, f"P{pid}")
+            else:
+                header = self._team_names.get(pid, f"Team {pid}")
+            columns.append((header, bo, color))
+
+        n_cols = max(2, len(columns))
+        col_w = aw // n_cols
         font = _get_font(14)
         row_h = 18
         r = BUILD_ORDER_RADIUS
         pad_x = 12
         pad_y = 8
-        col_w = aw // 2
 
-        # Clip to graph area
         clip_rect = pygame.Rect(ax, ay, aw, ah)
         old_clip = self.screen.get_clip()
         self.screen.set_clip(clip_rect)
 
-        # Column headers
         hdr_y = ay + pad_y - self._build_scroll
         hdr_font = _get_font(16)
-        h1 = hdr_font.render(self._name1, True, GRAPH_LINE_T1)
-        h2 = hdr_font.render(self._name2, True, GRAPH_LINE_T2)
-        self.screen.blit(h1, (ax + pad_x, hdr_y))
-        self.screen.blit(h2, (ax + col_w + pad_x, hdr_y))
 
-        start_y = hdr_y + row_h + 4
+        for ci, (col_name, bo, color) in enumerate(columns):
+            col_x = ax + ci * col_w
+            hdr_surf = hdr_font.render(col_name, True, color)
+            self.screen.blit(hdr_surf, (col_x + pad_x, hdr_y))
 
-        def _draw_column(entries: list, col_x: int, color: tuple):
-            for i, entry in enumerate(entries):
+            start_y = hdr_y + row_h + 4
+            for i, entry in enumerate(bo):
                 ey = start_y + i * row_h
                 if ey + row_h < ay or ey > ay + ah:
                     continue
-                cx = col_x + pad_x + r
-                cy = ey + row_h // 2
-                pygame.draw.circle(self.screen, color, (cx, cy), r)
-                ut = entry.get("unit_type", "soldier") if isinstance(entry, dict) else "soldier"
-                name = ut.replace("_", " ").title()
-                name_surf = font.render(name, True, (200, 200, 220))
-                self.screen.blit(name_surf, (cx + r + 6, cy - name_surf.get_height() // 2))
+                ecx = col_x + pad_x + r
+                ecy = ey + row_h // 2
+                pygame.draw.circle(self.screen, color, (ecx, ecy), r)
+                name_surf = font.render(_build_order_label(entry), True, (200, 200, 220))
+                self.screen.blit(name_surf, (ecx + r + 6, ecy - name_surf.get_height() // 2))
 
-        _draw_column(bo1, ax, GRAPH_LINE_T1)
-        _draw_column(bo2, ax + col_w, GRAPH_LINE_T2)
-
-        # Clamp scroll to content
-        max_rows = max(len(bo1), len(bo2))
+        max_rows = max((len(bo) for _, bo, _ in columns), default=0)
         max_scroll = max(0, (max_rows * row_h + pad_y + row_h + 4) - ah)
         self._build_scroll = min(self._build_scroll, max_scroll)
 
@@ -1210,7 +1264,7 @@ class ReplayPlaybackScreen(BaseScreen):
 
         # Capture progress arc
         if ow is None and abs(cp) > 0.01:
-            progress_color = METAL_SPOT_CAPTURE_ARC_COLOR_T1 if cp > 0 else METAL_SPOT_CAPTURE_ARC_COLOR_T2
+            progress_color = TEAM_COLORS.get(1, (80, 140, 255)) if cp > 0 else TEAM_COLORS.get(2, (255, 80, 80))
             arc_r = METAL_SPOT_CAPTURE_RADIUS + METAL_SPOT_CAPTURE_ARC_WIDTH
             start_angle = math.pi / 2
             end_angle = start_angle + cp * math.tau

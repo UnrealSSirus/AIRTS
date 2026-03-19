@@ -5,10 +5,9 @@ from entities.shapes import CircleEntity
 from entities.base import Entity, Damageable
 from entities.weapon import Weapon
 from config.settings import (
-    TEAM1_COLOR, TEAM2_COLOR, TEAM1_SELECTED_COLOR,
+    PLAYER_COLORS, TEAM1_SELECTED_COLOR,
     SELECTED_COLOR, HEALTH_BAR_OFFSET, MEDIC_HEAL_COLOR,
-    RANGE_COLOR, UNIT_LASER_COLOR_T1, UNIT_LASER_COLOR_T2,
-    HEAL_LASER_COLOR,
+    RANGE_COLOR, HEAL_LASER_COLOR,
 )
 from config.unit_types import UNIT_TYPES
 from core.helpers import angle_diff
@@ -46,13 +45,14 @@ class Unit(CircleEntity, Damageable):
     _steer_obstacles: tuple = ()  # set by Game; tuples of (x, y, radius)
 
     def __init__(self, x: float = 0, y: float = 0, team: int = 1,
-                 unit_type: str = "soldier"):
+                 unit_type: str = "soldier", player_id: int = 1):
         stats = UNIT_TYPES[unit_type]
         super().__init__(x, y, stats["radius"])
         self.unit_type = unit_type
         self.team = team
+        self.player_id = player_id
         self.speed: float = stats["speed"]
-        self.color = TEAM1_COLOR if team == 1 else TEAM2_COLOR
+        self.color = PLAYER_COLORS[player_id - 1]
         self._base_color = self.color
 
         self.max_hp: float = stats["hp"]
@@ -61,8 +61,7 @@ class Unit(CircleEntity, Damageable):
 
         wdata = stats.get("weapon")
         if wdata:
-            laser_color = wdata.get("laser_color",
-                                    UNIT_LASER_COLOR_T1 if team == 1 else UNIT_LASER_COLOR_T2)
+            laser_color = wdata.get("laser_color", PLAYER_COLORS[player_id - 1])
             if wdata.get("hits_only_friendly", False):
                 laser_color = HEAL_LASER_COLOR
             self.weapon = Weapon(
@@ -367,6 +366,7 @@ class Unit(CircleEntity, Damageable):
         d = super().to_dict()
         d.update({
             "team": self.team,
+            "player_id": self.player_id,
             "unit_type": self.unit_type,
             "hp": self.hp,
             "laser_cooldown": self.laser_cooldown,
@@ -387,7 +387,8 @@ class Unit(CircleEntity, Damageable):
 
     @classmethod
     def from_dict(cls, data: dict) -> Unit:
-        u = cls(data["x"], data["y"], data["team"], data["unit_type"])
+        u = cls(data["x"], data["y"], data["team"], data["unit_type"],
+                player_id=data.get("player_id", data.get("team", 1)))
         u.entity_id = data["entity_id"]
         u.color = tuple(data["color"])
         u.selected = data["selected"]

@@ -17,7 +17,7 @@ from config.settings import OBSTACLE_COLOR, CC_SPAWN_INTERVAL, METAL_SPOT_RADIUS
 class BaseMapGenerator:
     """Interface for map generators."""
 
-    def generate(self, width: int, height: int) -> list[Entity]:
+    def generate(self, width: int, height: int, player_team: dict | None = None) -> list[Entity]:
         raise NotImplementedError
 
 
@@ -27,9 +27,9 @@ class DefaultMapGenerator(BaseMapGenerator):
     def __init__(self, obstacle_count: tuple[int, int] = (4, 8)):
         self._obs_range = obstacle_count
 
-    def generate(self, width: int, height: int) -> list[Entity]:
+    def generate(self, width: int, height: int, player_team: dict | None = None) -> list[Entity]:
         entities: list[Entity] = []
-        self._place_command_centers(entities, width, height)
+        self._place_command_centers(entities, width, height, player_team or {1: 1, 2: 2})
         self._place_metal_spots(entities, width, height)
         self._place_obstacles(entities, width, height)
         return entities
@@ -88,16 +88,37 @@ class DefaultMapGenerator(BaseMapGenerator):
             obs.color = OBSTACLE_COLOR
             entities.append(obs)
 
-    def _place_command_centers(self, entities: list[Entity], width: int, height: int):
-        cc1 = CommandCenter(80, height // 2, team=1)
-        cc1._bounds = (width, height)
-        cc1._spawn_timer = CC_SPAWN_INTERVAL
-        entities.append(cc1)
+    def _place_command_centers(self, entities: list[Entity], width: int, height: int,
+                                player_team: dict):
+        # Group players by team, preserving sorted order within each team
+        team_players: dict[int, list[int]] = {}
+        for pid in sorted(player_team):
+            tid = player_team[pid]
+            team_players.setdefault(tid, []).append(pid)
 
-        cc2 = CommandCenter(width - 80, height // 2, team=2)
-        cc2._bounds = (width, height)
-        cc2._spawn_timer = CC_SPAWN_INTERVAL
-        entities.append(cc2)
+        # Assign each team to a horizontal side
+        sorted_teams = sorted(team_players)
+        n_teams = max(len(sorted_teams), 2)
+        # x positions: divide width into n_teams strips, inset 80px from each edge
+        inset = 80
+        if n_teams == 2:
+            side_xs = {sorted_teams[0]: inset, sorted_teams[1]: width - inset}
+        else:
+            side_xs = {
+                tid: inset + i * (width - 2 * inset) / (n_teams - 1)
+                for i, tid in enumerate(sorted_teams)
+            }
+
+        for tid, pids in team_players.items():
+            sx = side_xs[tid]
+            m = len(pids)
+            for j, pid in enumerate(pids):
+                # Distribute vertically: 1 player → center, N players → evenly spaced
+                sy = height * (j + 1) / (m + 1)
+                cc = CommandCenter(sx, sy, team=tid, player_id=pid)
+                cc._bounds = (width, height)
+                cc._spawn_timer = CC_SPAWN_INTERVAL
+                entities.append(cc)
 
     def _place_metal_spots(self, entities: list[Entity], width: int, height: int):
         for _ in range(random.randint(2, 4)):

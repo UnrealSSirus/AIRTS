@@ -133,8 +133,32 @@ def combat_step(
             if a.fire_mode == HOLD_FIRE:
                 pass
             elif wpn.hits_only_friendly:
-                # Healer: check nearest_ally for range, damage, FOV, LOS
+                # Healer: nearest_ally is the closest ally by distance, but may be a
+                # full-HP medic when multiple medics cluster together.  Fall back to a
+                # quadfield search for the nearest wounded ally within weapon range so
+                # that 3+ medics can all find and heal the same injured unit.
                 ally = a.nearest_ally
+                if (ally is None or not ally.alive
+                        or isinstance(ally, CommandCenter)
+                        or ally.hp >= ally.max_hp):
+                    # nearest_ally is unhelpful — find closest hurt ally in range
+                    if quadfield is not None:
+                        candidates = quadfield.get_team_units_exact(ax, ay, a_range, a.team)
+                    else:
+                        candidates = units
+                    best_hurt: Unit | None = None
+                    best_hurt_dsq = float("inf")
+                    for u in candidates:
+                        if u is a or not u.alive or isinstance(u, CommandCenter):
+                            continue
+                        if u.team != a.team or u.hp >= u.max_hp:
+                            continue
+                        dx, dy = u.x - ax, u.y - ay
+                        dsq = dx * dx + dy * dy
+                        if dsq < best_hurt_dsq:
+                            best_hurt_dsq = dsq
+                            best_hurt = u
+                    ally = best_hurt
                 if ally is not None and ally.alive and not isinstance(ally, CommandCenter):
                     if ally.hp < ally.max_hp:
                         d = math.hypot(ally.x - ax, ally.y - ay)

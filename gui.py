@@ -9,7 +9,7 @@ from entities.metal_extractor import MetalExtractor
 from config.settings import (
     GUI_BORDER, GUI_BTN_SELECTED, GUI_BTN_HOVER, GUI_BTN_NORMAL,
     GUI_TEXT_COLOR,
-    TEAM1_COLOR, TEAM1_SELECTED_COLOR, TEAM2_COLOR,
+    PLAYER_COLORS, TEAM1_SELECTED_COLOR,
     HEALTH_BAR_FG, HEALTH_BAR_LOW, HEALTH_BAR_BG,
     CC_SPAWN_INTERVAL,
 )
@@ -256,7 +256,7 @@ def _draw_group_grid(screen: pygame.Surface, r: pygame.Rect,
         cx, cy = box.centerx, box.centery
         stats = UNIT_TYPES.get(unit.unit_type, {})
         sym = stats.get("symbol")
-        base_color = TEAM1_COLOR if unit.team == 1 else TEAM2_COLOR
+        base_color = PLAYER_COLORS[unit.player_id - 1]
 
         if isinstance(unit, CommandCenter):
             pts = hexagon_points(bs * 0.3)
@@ -297,7 +297,7 @@ def _draw_portrait(screen: pygame.Surface, r: pygame.Rect,
 
     stats = UNIT_TYPES.get(unit.unit_type, {})
     sym = stats.get("symbol")
-    base_color = TEAM1_COLOR if unit.team == 1 else TEAM2_COLOR
+    base_color = PLAYER_COLORS[unit.player_id - 1]
 
     if isinstance(unit, CommandCenter):
         pts = hexagon_points(sz * 0.35)
@@ -363,10 +363,10 @@ def _draw_actions(screen: pygame.Surface, r: pygame.Rect,
             if sym is not None:
                 sc = 0.9
                 pts = [(cx + px * sc, cy + py * sc) for px, py in sym]
-                pygame.draw.polygon(screen, TEAM1_COLOR, pts)
+                pygame.draw.polygon(screen, PLAYER_COLORS[0], pts)
                 pygame.draw.polygon(screen, TEAM1_SELECTED_COLOR, pts, 1)
             else:
-                pygame.draw.circle(screen, TEAM1_COLOR, (cx, cy), 7)
+                pygame.draw.circle(screen, PLAYER_COLORS[0], (cx, cy), 7)
                 pygame.draw.circle(screen, TEAM1_SELECTED_COLOR, (cx, cy), 7, 1)
 
         if hovered_type is not None:

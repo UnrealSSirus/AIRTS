@@ -11,14 +11,14 @@ class GameCommand:
     """A single player action that can be serialized and replayed."""
 
     type: str          # "move", "attack", "stop", "set_rally", "set_spawn_type"
-    team: int          # issuing team
+    player_id: int     # issuing player (controller id, not alliance team)
     tick: int          # game tick when issued
     data: dict[str, Any] = field(default_factory=dict)
 
     def serialize(self) -> str:
         return json.dumps({
             "type": self.type,
-            "team": self.team,
+            "player_id": self.player_id,
             "tick": self.tick,
             "data": self.data,
         })
@@ -28,7 +28,8 @@ class GameCommand:
         d = json.loads(raw)
         return GameCommand(
             type=d["type"],
-            team=d["team"],
+            # Support old replays/messages that used "team" key
+            player_id=d.get("player_id", d.get("team", 0)),
             tick=d["tick"],
             data=d["data"],
         )

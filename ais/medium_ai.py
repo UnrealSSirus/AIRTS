@@ -84,7 +84,9 @@ class MediumAI(BaseAI):
     # -- helpers ------------------------------------------------------------
 
     def _on_our_side(self, entity, mid_x: float) -> bool:
-        return (entity.x < mid_x) if self._team == 1 else (entity.x > mid_x)
+        cc = self.get_cc()
+        on_left = (cc.x < mid_x) if cc else True
+        return (entity.x < mid_x) if on_left else (entity.x > mid_x)
 
     # -- scout behavior -----------------------------------------------------
 

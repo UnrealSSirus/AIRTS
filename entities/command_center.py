@@ -6,25 +6,24 @@ from entities.unit import Unit
 from entities.weapon import Weapon
 from core.helpers import hexagon_points
 from config.settings import (
-    TEAM1_COLOR, TEAM2_COLOR, TEAM1_SELECTED_COLOR, SELECTED_COLOR, DEFAULT_COLOR,
+    PLAYER_COLORS, TEAM1_SELECTED_COLOR, SELECTED_COLOR, DEFAULT_COLOR,
     CC_HP, CC_SPAWN_INTERVAL, CC_RADIUS, HEALTH_BAR_OFFSET,
     CC_LASER_DAMAGE, CC_LASER_RANGE, CC_LASER_COOLDOWN,
-    CC_LASER_COLOR_T1, CC_LASER_COLOR_T2,
     RANGE_COLOR,
 )
 
 
 class CommandCenter(Unit):
-    def __init__(self, x: float = 0, y: float = 0, team: int = 1):
-        super().__init__(x, y, team, unit_type="command_center")
+    def __init__(self, x: float = 0, y: float = 0, team: int = 1, player_id: int = 1):
+        super().__init__(x, y, team, unit_type="command_center", player_id=player_id)
 
-        # CC-specific weapon (team-dependent laser color, not from config)
+        # CC-specific weapon (player-coloured laser)
         self.weapon = Weapon(
             name="Laser",
             damage=CC_LASER_DAMAGE,
             range=CC_LASER_RANGE,
             cooldown=CC_LASER_COOLDOWN,
-            laser_color=CC_LASER_COLOR_T1 if team == 1 else CC_LASER_COLOR_T2,
+            laser_color=PLAYER_COLORS[player_id - 1],
             laser_width=2,
         )
         self.attack_damage = self.weapon.damage
@@ -63,7 +62,8 @@ class CommandCenter(Unit):
         dist = CC_RADIUS + 15
         ux = self.x + math.cos(angle) * dist
         uy = self.y + math.sin(angle) * dist
-        u = Unit(ux, uy, team=self.team, unit_type=self.spawn_type)
+        u = Unit(ux, uy, team=self.team, unit_type=self.spawn_type,
+                 player_id=self.player_id)
         u._bounds = self._bounds
         if self.rally_point is not None:
             u.move(*self.rally_point)
@@ -73,8 +73,7 @@ class CommandCenter(Unit):
         """Draw the CC hexagon at a given scale factor (0..1). No spawn arc or rally flag."""
         scaled_pts = [(self.x + px * scale, self.y + py * scale) for px, py in self.points]
         pygame.draw.polygon(surface, self.color, scaled_pts)
-        outline = TEAM1_SELECTED_COLOR if self.team == 1 else (255, 140, 140)
-        pygame.draw.polygon(surface, outline, scaled_pts, 2)
+        pygame.draw.polygon(surface, SELECTED_COLOR, scaled_pts, 2)
 
         # Health bar only if visible
         if scale > 0.1:
@@ -83,8 +82,7 @@ class CommandCenter(Unit):
     def draw(self, surface: pygame.Surface):
         translated = [(self.x + px, self.y + py) for px, py in self.points]
         pygame.draw.polygon(surface, self.color, translated)
-        outline = TEAM1_SELECTED_COLOR if self.team == 1 else (255, 140, 140)
-        pygame.draw.polygon(surface, outline, translated, 2)
+        pygame.draw.polygon(surface, SELECTED_COLOR, translated, 2)
 
         if self.selected:
             pygame.draw.polygon(surface, SELECTED_COLOR, translated, 2)
@@ -128,7 +126,8 @@ class CommandCenter(Unit):
 
     @classmethod
     def from_dict(cls, data: dict) -> CommandCenter:
-        cc = cls(data["x"], data["y"], data["team"])
+        cc = cls(data["x"], data["y"], data["team"],
+                 player_id=data.get("player_id", data.get("team", 1)))
         cc.entity_id = data["entity_id"]
         cc.color = tuple(data["color"])
         cc.selected = data["selected"]
