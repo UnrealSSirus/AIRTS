@@ -9,6 +9,7 @@ from ui.theme import (
 )
 from ui.widgets import Button, BackButton, TextInput, ToggleGroup, Slider, _get_font
 from networking.protocol import DEFAULT_PORT
+from screens.create_lobby import _load_settings
 
 # Map size presets (matching create_lobby.py)
 _MAP_PRESETS = [
@@ -34,6 +35,9 @@ class MultiplayerLobbyScreen(BaseScreen):
         super().__init__(screen, clock)
         cx = self.width // 2
 
+        # Load saved player name from lobby settings
+        saved_name = _load_settings().get("player_name", "")
+
         # Mode: not yet chosen
         self._mode: str = ""  # "", "host", "join"
 
@@ -51,6 +55,7 @@ class MultiplayerLobbyScreen(BaseScreen):
         # -- Host mode widgets --
         self._host_name_input = TextInput(
             cx - 100, 160, 200,
+            text=saved_name,
             placeholder="Your Name", max_len=24,
         )
         self._host_map_size = ToggleGroup(
@@ -66,6 +71,10 @@ class MultiplayerLobbyScreen(BaseScreen):
         )
         self._host_obj = None
         self._host_status = "Waiting for player..."
+        self._copy_ip_btn = Button(
+            cx - 45, 400, 90, 30, "Copy IP", font_size=18,
+        )
+        self._copy_flash: float = 0.0  # seconds remaining for "Copied!" feedback
 
         # -- Join mode widgets --
         self._join_ip_input = TextInput(
@@ -74,6 +83,7 @@ class MultiplayerLobbyScreen(BaseScreen):
         )
         self._join_name_input = TextInput(
             cx - 100, 270, 200,
+            text=saved_name,
             placeholder="Your Name", max_len=24,
         )
         self._join_connect_btn = Button(
@@ -116,6 +126,10 @@ class MultiplayerLobbyScreen(BaseScreen):
                     self._host_name_input.handle_event(event)
                     self._host_map_size.handle_event(event)
                     self._host_obstacles.handle_event(event)
+                    if self._copy_ip_btn.handle_event(event):
+                        if self._host_obj:
+                            self._copy_to_clipboard(self._host_obj.local_ip)
+                            self._copy_flash = 2.0
                     if self._host_start_btn.handle_event(event):
                         if self._host_obj and self._host_obj.client_ready:
                             return self._build_host_result()
@@ -126,6 +140,10 @@ class MultiplayerLobbyScreen(BaseScreen):
                     if self._join_connect_btn.handle_event(event):
                         if not self._client_obj or self._join_error:
                             self._start_client()
+
+            # Tick copy-flash timer
+            if self._copy_flash > 0:
+                self._copy_flash = max(0.0, self._copy_flash - dt)
 
             # Poll connection status
             if self._mode == "host" and self._host_obj:
@@ -208,6 +226,17 @@ class MultiplayerLobbyScreen(BaseScreen):
             "client": self._client_obj,
         })
 
+    @staticmethod
+    def _copy_to_clipboard(text: str) -> None:
+        """Copy text to the system clipboard."""
+        import subprocess
+        try:
+            subprocess.Popen(
+                ["clip"], stdin=subprocess.PIPE, shell=True,
+            ).communicate(text.encode())
+        except Exception:
+            pass
+
     def _cleanup(self) -> None:
         if self._host_obj:
             self._host_obj.stop()
@@ -248,6 +277,13 @@ class MultiplayerLobbyScreen(BaseScreen):
             color = _SUCCESS_COLOR if ready else _STATUS_COLOR
             status = font.render(self._host_status, True, color)
             self.screen.blit(status, (cx - status.get_width() // 2, 370))
+
+            # Copy IP button
+            if self._host_obj:
+                self._copy_ip_btn.draw(self.screen)
+                if self._copy_flash > 0:
+                    copied = font.render("Copied!", True, _SUCCESS_COLOR)
+                    self.screen.blit(copied, (cx - copied.get_width() // 2, 435))
 
             if ready:
                 self._host_start_btn.draw(self.screen)

@@ -225,7 +225,6 @@ class App:
         from game import Game
         from systems.map_generator import DefaultMapGenerator
         from networking.host import GameHost
-        from systems.replay import RECORD_INTERVAL
 
         width = data.get("width", 800)
         height = data.get("height", 600)
@@ -238,18 +237,21 @@ class App:
         screen_h = self._screen.get_height()
 
         replay_config = {
-            "team_ai_ids": {},
-            "team_ai_names": {1: host_name, 2: client_name},
+            "player_ai_ids": {},
+            "player_ai_names": {},
+            "player_team": {1: 1, 2: 2},
             "obstacle_count": list(obs),
             "player_name": host_name,
         }
 
         # Create game with NO AI — both teams are human
+        # selectable_teams={1} ensures host can only select/control team 1
         game = Game(
             width=width,
             height=height,
             map_generator=DefaultMapGenerator(obstacle_count=obs),
-            team_ai={},  # both teams human
+            player_ai={},  # both teams human
+            player_team={1: 1, 2: 2},
             screen=self._screen,
             clock=self._clock,
             replay_config=replay_config,
@@ -257,6 +259,7 @@ class App:
             screen_width=screen_w,
             screen_height=screen_h,
             is_multiplayer=True,
+            selectable_teams={1},
         )
 
         # Rebind the host's command queue to the game's actual queue
@@ -265,11 +268,6 @@ class App:
 
         # Send game_start to client
         host_obj.send_game_start(game.entities, width, height)
-
-        # Override selectability: host only selects team 1
-        for e in game.entities:
-            if hasattr(e, "team") and hasattr(e, "selectable"):
-                e.selectable = (e.team == 1)
 
         # Wrap the game's step to inject remote commands and broadcast state
         original_step = game.step

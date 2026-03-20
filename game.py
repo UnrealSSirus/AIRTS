@@ -100,10 +100,12 @@ class Game:
         screen_width: int | None = None,
         screen_height: int | None = None,
         is_multiplayer: bool = False,
+        selectable_teams: set[int] | None = None,
     ):
         """
-        *player_ai* maps player_id → AI controller.  Players **not** present
-        are human-controlled.  *player_team* maps player_id → team_id.
+        *team_ai* maps team numbers to AI controllers.  Teams **not** present
+        in the dict are human-controlled.  At least one team must have an AI
+        (Human-vs-Human is not supported).
 
         Legacy *team_ai* (maps team_id → AI) is still accepted and treated as
         player_ai with team_id == player_id (1v1 default).
@@ -185,6 +187,15 @@ class Game:
         self.all_players: set[int] = set(self.player_team.keys())
         self.human_players: set[int] = self.all_players - set(self.player_ai.keys())
         self.human_teams: set[int] = {self.player_team[p] for p in self.human_players}
+        self._selectable_teams: set[int] = (
+            set(selectable_teams) if selectable_teams is not None else set(self.human_teams)
+        )
+        # Players whose spawned units should be selectable — derived from
+        # _selectable_teams so multiplayer host (selectable_teams={1}) never
+        # gets client-side units marked selectable.
+        self._selectable_players: set[int] = {
+            p for p, t in self.player_team.items() if t in self._selectable_teams
+        }
 
         # Legacy alias so external code (Perigee, arena, etc.) keeps working
         self.team_ai: dict[int, BaseAI] = self.player_ai
@@ -292,8 +303,8 @@ class Game:
 
     def _apply_selectability(self):
         for e in self.entities:
-            if hasattr(e, "player_id") and hasattr(e, "selectable"):
-                e.selectable = e.player_id in self.human_players
+            if hasattr(e, "team") and hasattr(e, "selectable"):
+                e.selectable = e.team in self._selectable_teams
 
     def _bind_and_start_ais(self):
         for pid, ai in self.player_ai.items():
@@ -855,7 +866,7 @@ class Game:
         # Spawn — spawn_step already appends to self.units; add to team lists
         entity_count_before_spawn = len(self.entities)
         _t = _perf()
-        spawn_step(self.entities, self.command_centers, self.human_players, stats=self._stats, tick=self._iteration, units=self.units)
+        spawn_step(self.entities, self.command_centers, self._selectable_players, stats=self._stats, tick=self._iteration, units=self.units)
 
         if len(self.entities) > entity_count_before_spawn:
             self._physics_cooldown = 60  # 1 second to settle after spawn
