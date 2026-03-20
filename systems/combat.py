@@ -133,37 +133,36 @@ def combat_step(
             if a.fire_mode == HOLD_FIRE:
                 pass
             elif wpn.hits_only_friendly:
-                # Healer: nearest_ally is the closest ally by distance, but may be a
-                # full-HP medic when multiple medics cluster together.  Fall back to a
-                # quadfield search for the nearest wounded ally within weapon range so
-                # that 3+ medics can all find and heal the same injured unit.
-                ally = a.nearest_ally
-                if (ally is None or not ally.alive
-                        or isinstance(ally, CommandCenter)
-                        or ally.hp >= ally.max_hp):
-                    # nearest_ally is unhelpful — find closest hurt ally in range
-                    if quadfield is not None:
-                        candidates = quadfield.get_team_units_exact(ax, ay, a_range, a.team)
-                    else:
-                        candidates = units
-                    best_hurt: Unit | None = None
-                    best_hurt_dsq = float("inf")
-                    for u in candidates:
-                        if u is a or not u.alive or isinstance(u, CommandCenter):
-                            continue
-                        if u.team != a.team or u.hp >= u.max_hp:
-                            continue
-                        dx, dy = u.x - ax, u.y - ay
-                        dsq = dx * dx + dy * dy
-                        if dsq < best_hurt_dsq:
-                            best_hurt_dsq = dsq
-                            best_hurt = u
-                    ally = best_hurt
-                if ally is not None and ally.alive and not isinstance(ally, CommandCenter):
-                    if ally.hp < ally.max_hp:
-                        d = math.hypot(ally.x - ax, ally.y - ay)
-                        if d <= a_range and _in_fov(a, ally.x, ally.y) and _has_los(ax, ay, ally.x, ally.y, circle_obs, rect_obs):
-                            best_target = ally
+                # Always search within weapon range for the nearest wounded ally.
+                # nearest_ally is the geometrically closest ally regardless of range
+                # or HP, so relying on it causes healers to miss hurt units inside
+                # range when the closest ally is wounded but farther away.
+                if quadfield is not None:
+                    candidates = quadfield.get_team_units_exact(ax, ay, a_range, a.team)
+                else:
+                    candidates = units
+                # Strict center-to-center range check — the quadfield uses
+                # radius + u.radius overlap semantics, so a secondary exact
+                # check is needed to honour the weapon's stated range.
+                a_range_sq: float = a_range * a_range
+                best_hurt: Unit | None = None
+                best_hurt_dsq = float("inf")
+                for u in candidates:
+                    if u is a or not u.alive or isinstance(u, CommandCenter):
+                        continue
+                    if u.team != a.team or u.hp >= u.max_hp:
+                        continue
+                    dx, dy = u.x - ax, u.y - ay
+                    dsq = dx * dx + dy * dy
+                    if dsq > a_range_sq:
+                        continue
+                    if dsq < best_hurt_dsq:
+                        best_hurt_dsq = dsq
+                        best_hurt = u
+                if (best_hurt is not None
+                        and _in_fov(a, best_hurt.x, best_hurt.y)
+                        and _has_los(ax, ay, best_hurt.x, best_hurt.y, circle_obs, rect_obs)):
+                    best_target = best_hurt
             else:
                 # Attacker: honour attack_target first, then nearest_enemy
                 preferred = a.attack_target
@@ -236,7 +235,14 @@ def combat_step(
                     team=a.team,
                 ))
         else:
-            if a.nearest_enemy is not None:
+            if wpn.hits_only_friendly:
+                # Healer: rotate toward nearest wounded ally in LOS range so
+                # the 30° FOV cone aligns before weapon range is reached.
+                if quadfield is not None:
+                    rot = _find_rotation_target(a, ax, ay, quadfield, circle_obs, rect_obs)
+                    if rot is not None:
+                        a._facing_target = rot
+            elif a.nearest_enemy is not None:
                 a._facing_target = a.nearest_enemy
 
     # -- process pending chains ----------------------------------------------

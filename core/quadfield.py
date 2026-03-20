@@ -11,6 +11,12 @@ units in the grid are alive (no per-unit alive check).
 Deduplication uses an integer stamp (BAR-style) instead of a set:
 each query bumps a counter, and units whose _temp_num already matches
 the current stamp are skipped.  O(1) per unit with zero allocation.
+
+Distance checks in _exact methods use circle-circle overlap semantics:
+a unit at distance d is included when d <= radius + unit.radius.  This
+is correct for collision queries (caller passes own radius) and acts as
+a conservative over-approximation for range queries (callers that need
+strict center-to-center range should apply a secondary dsq check).
 """
 from __future__ import annotations
 
@@ -47,6 +53,12 @@ class QuadCell:
                 team_list.remove(unit)
             except ValueError:
                 pass
+            else:
+                # Delete the key when the list empties so iteration over
+                # team_units.items() in get_enemy_units_exact / get_nearby_split
+                # doesn't touch dead entries.
+                if not team_list:
+                    del self.team_units[unit.team]
 
 
 class QuadField:
@@ -61,7 +73,7 @@ class QuadField:
     """
 
     __slots__ = ("cell_size", "inv_cell", "num_cols", "num_rows", "cells",
-                 "_query_counter")
+                 "_query_counter", "_quads_buf")
 
     def __init__(self, width: int, height: int, cell_size: int = 64):
         self.cell_size = cell_size
@@ -72,29 +84,43 @@ class QuadField:
             QuadCell() for _ in range(self.num_cols * self.num_rows)
         ]
         self._query_counter: int = 0
+        # Reusable scratch buffer for internal quad-index computation.
+        # Eliminates per-query list allocation on the hot path.
+        # Single-threaded only — must not be stored or aliased by callers.
+        self._quads_buf: list[int] = []
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _cell_index(self, col: int, row: int) -> int:
-        return row * self.num_cols + col
+    def _fill_quads(self, x: float, y: float, radius: float) -> list[int]:
+        """Fill and return the shared _quads_buf with cell indices that
+        overlap the circle (x, y, radius).
 
-    def get_quads(self, x: float, y: float, radius: float) -> list[int]:
-        """Return cell indices overlapping the circle (x, y, radius)."""
+        The returned reference IS _quads_buf — callers must not store it,
+        as the next call to _fill_quads overwrites it.
+        """
         inv = self.inv_cell
         col_min = max(int((x - radius) * inv), 0)
         col_max = min(int((x + radius) * inv), self.num_cols - 1)
         row_min = max(int((y - radius) * inv), 0)
         row_max = min(int((y + radius) * inv), self.num_rows - 1)
-
         nc = self.num_cols
-        result: list[int] = []
+        buf = self._quads_buf
+        buf.clear()
         for r in range(row_min, row_max + 1):
             base = r * nc
             for c in range(col_min, col_max + 1):
-                result.append(base + c)
-        return result
+                buf.append(base + c)
+        return buf
+
+    def get_quads(self, x: float, y: float, radius: float) -> list[int]:
+        """Return a new list of cell indices overlapping (x, y, radius).
+
+        Allocates and returns a fresh list — safe for callers to store.
+        Internal methods use _fill_quads to avoid the allocation.
+        """
+        return list(self._fill_quads(x, y, radius))
 
     # ------------------------------------------------------------------
     # Unit lifecycle
@@ -120,30 +146,31 @@ class QuadField:
 
         Early-outs when the unit is still in the same set of cells,
         which is the overwhelmingly common case (~95%+ of frames).
+
+        Uses the shared _quads_buf so the common early-out path does
+        zero list allocation.  Only allocates when a cell boundary is
+        actually crossed.
         """
-        new_quads = self.get_quads(unit.x, unit.y, unit.radius)
+        quads = self._fill_quads(unit.x, unit.y, unit.radius)
         old_quads = unit._quad_cells
 
-        # Fast equality check — same length and same contents
-        if len(new_quads) == len(old_quads):
-            same = True
-            for i in range(len(new_quads)):
-                if new_quads[i] != old_quads[i]:
-                    same = False
-                    break
-            if same:
-                return
+        # C-level list equality — faster than the manual element loop
+        # and safe because _fill_quads produces indices in deterministic
+        # row-major order (same ordering as old_quads was stored in).
+        if quads == old_quads:
+            return
 
         cells = self.cells
         old_set = set(old_quads)
-        new_set = set(new_quads)
+        new_set = set(quads)
 
         for qi in old_set - new_set:
             cells[qi].remove(unit)
         for qi in new_set - old_set:
             cells[qi].add(unit)
 
-        unit._quad_cells = new_quads
+        # Copy — must not store the _quads_buf reference directly.
+        unit._quad_cells = list(quads)
 
     # ------------------------------------------------------------------
     # Queries
@@ -151,6 +178,10 @@ class QuadField:
     # All query methods use stamp-based deduplication: a global counter
     # is bumped each call and compared against unit._temp_num.  No set
     # allocation, no hashing — just an int compare and write per unit.
+    #
+    # _exact methods use circle-circle overlap: d <= radius + u.radius.
+    # For strict center-to-center range enforcement, callers can apply a
+    # secondary dsq <= range**2 check on the returned candidates.
     #
     # Units in the grid are assumed alive; dead units must be removed
     # via remove_unit() at cleanup time.
@@ -167,7 +198,7 @@ class QuadField:
         """
         self._query_counter += 1
         stamp = self._query_counter
-        quads = self.get_quads(x, y, radius)
+        quads = self._fill_quads(x, y, radius)
         cells = self.cells
         if out is None:
             result: list[Unit] = []
@@ -187,7 +218,7 @@ class QuadField:
         """Return units within *radius + unit.radius* of (x, y)."""
         self._query_counter += 1
         stamp = self._query_counter
-        quads = self.get_quads(x, y, radius)
+        quads = self._fill_quads(x, y, radius)
         cells = self.cells
         if out is None:
             result: list[Unit] = []
@@ -213,7 +244,7 @@ class QuadField:
         """Return same-team units within *radius + unit.radius*."""
         self._query_counter += 1
         stamp = self._query_counter
-        quads = self.get_quads(x, y, radius)
+        quads = self._fill_quads(x, y, radius)
         cells = self.cells
         if out is None:
             result: list[Unit] = []
@@ -245,7 +276,7 @@ class QuadField:
         """
         self._query_counter += 1
         stamp = self._query_counter
-        quads = self.get_quads(x, y, radius)
+        quads = self._fill_quads(x, y, radius)
         cells = self.cells
         if out is None:
             result: list[Unit] = []
@@ -276,12 +307,12 @@ class QuadField:
         """Single-pass query returning (enemies, allies) within radius.
 
         Iterates each cell's team_units once, partitioning into two
-        output lists.  One get_quads call, one stamp increment — half
+        output lists.  One _fill_quads call, one stamp increment — half
         the work of calling get_enemy_units_exact + get_team_units_exact.
         """
         self._query_counter += 1
         stamp = self._query_counter
-        quads = self.get_quads(x, y, radius)
+        quads = self._fill_quads(x, y, radius)
         cells = self.cells
 
         if out_enemies is None:
@@ -324,6 +355,10 @@ class QuadField:
         for u in units:
             if u.alive:
                 self.add_unit(u)
+            else:
+                # Clear stale cell refs so remove_unit() calls on dead
+                # units don't silently no-op against the wrong cells.
+                u._quad_cells = []
 
     def clear(self) -> None:
         """Remove everything from the grid."""

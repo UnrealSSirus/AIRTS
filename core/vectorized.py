@@ -46,10 +46,11 @@ def batch_facing_update(units, dt_scaled: float) -> None:
 
     for i, u in enumerate(units):
         if u.weapon is not None and u.weapon.hits_only_friendly:
-            t = u.nearest_ally
-            if t is None or not getattr(t, 'alive', False):
-                continue
-            if t.hp >= t.max_hp:
+            # Use _facing_target, set each tick by combat_step to the nearest
+            # wounded ally within LOS range.  nearest_ally is geometrically
+            # closest regardless of HP — useless when that ally is healthy.
+            t = getattr(u, '_facing_target', None)
+            if t is None or not getattr(t, 'alive', False) or t.hp >= t.max_hp:
                 continue
         else:
             t = u.nearest_enemy
