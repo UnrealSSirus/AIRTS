@@ -14,3 +14,8 @@ class Weapon:
     sound: str = "fast_laser"
     chain_range: float = 0.0    # 0 = no chaining
     chain_delay: float = 0.0    # seconds between bounces
+    splash_radius: float = 0.0  # 0 = no splash
+    splash_damage_max: float = 0.0  # damage at impact point
+    splash_damage_min: float = 0.0  # damage at splash edge (linear falloff)
+    laser_flash_duration: float = 0.0  # 0 = use global default
+    charge_time: float = 0.0   # 0 = fire immediately; >0 = lock target pos and delay

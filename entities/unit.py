@@ -75,6 +75,11 @@ class Unit(CircleEntity, Damageable):
                 sound=wdata.get("sound", "fast_laser"),
                 chain_range=wdata.get("chain_range", 0.0),
                 chain_delay=wdata.get("chain_delay", 0.0),
+                splash_radius=wdata.get("splash_radius", 0.0),
+                splash_damage_max=wdata.get("splash_damage_max", 0.0),
+                splash_damage_min=wdata.get("splash_damage_min", 0.0),
+                laser_flash_duration=wdata.get("laser_flash_duration", 0.0),
+                charge_time=wdata.get("charge_time", 0.0),
             )
         else:
             self.weapon = None
@@ -109,6 +114,10 @@ class Unit(CircleEntity, Damageable):
 
         self.selectable: bool = False
         self._facing_target: Entity | None = None   # entity ref, set by combat system
+
+        # -- charge state (artillery etc.) -------------------------------------
+        self._charge_pos: tuple[float, float] | None = None  # locked world position
+        self._charge_timer: float = 0.0                      # seconds remaining
 
         # -- targeting data (populated every 15 ticks by Game) -------------------
         self.nearest_enemy: Unit | None = None       # vectorized nearest enemy
@@ -217,6 +226,8 @@ class Unit(CircleEntity, Damageable):
             self.target = None
 
     def _update_movement(self, dt: float):
+        if self._charge_pos is not None:
+            return  # locked in place while charging
         if self.target is None:
             return
 
@@ -382,6 +393,8 @@ class Unit(CircleEntity, Damageable):
             "_follow_dist": self._follow_dist,
             "attack_target_id": self.attack_target.entity_id if self.attack_target else None,
             "abilities": [a.to_dict() for a in self.abilities],
+            "_charge_pos": list(self._charge_pos) if self._charge_pos else None,
+            "_charge_timer": self._charge_timer,
         })
         return d
 
@@ -410,6 +423,9 @@ class Unit(CircleEntity, Damageable):
                 if isinstance(ab, Focus) and ab.timer > 0 and ab._base_speed > 0:
                     t = ab.timer / Focus.DURATION
                     u.speed = ab._base_speed * (Focus.MIN_MULT + (1.0 - Focus.MIN_MULT) * (1.0 - t))
+        cp = data.get("_charge_pos")
+        u._charge_pos = tuple(cp) if cp else None
+        u._charge_timer = data.get("_charge_timer", 0.0)
         # cross-references resolved later by Game.load_state()
         u._follow_entity = None
         u.attack_target = None

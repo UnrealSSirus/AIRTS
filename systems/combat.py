@@ -8,7 +8,7 @@ from entities.shapes import CircleEntity, RectEntity
 from entities.unit import Unit, HOLD_FIRE, TARGET_FIRE, FREE_FIRE
 from entities.weapon import Weapon
 from entities.command_center import CommandCenter
-from entities.laser import LaserFlash
+from entities.laser import LaserFlash, SplashEffect
 from core.helpers import line_intersects_circle, line_intersects_rect, angle_diff
 import config.audio as audio
 
@@ -99,6 +99,7 @@ def combat_step(
     rect_obs=None,
     sounds=None,
     pending_chains: list[PendingChain] | None = None,
+    splash_effects: list[SplashEffect] | None = None,
 ):
     # Use pre-extracted obstacle geometry if provided, else extract here
     if circle_obs is None:
@@ -127,6 +128,93 @@ def combat_step(
         a_dmg = wpn.damage
         a_cd = wpn.cooldown
 
+        # -- Active charge: count down and fire at locked world position -------
+        if a._charge_pos is not None:
+            a._charge_timer -= dt
+            if a._charge_timer <= 0:
+                tx, ty = a._charge_pos
+                a._charge_pos = None
+                a.laser_cooldown = a_cd  # cooldown starts after actual firing
+
+                # Direct hit: find enemy whose hitbox contains the impact point
+                direct_hit: Unit | None = None
+                if quadfield is not None:
+                    _cands = quadfield.get_enemy_units_exact(tx, ty, 15, a.team)
+                else:
+                    _cands = units
+                _best_dsq = float("inf")
+                for u in _cands:
+                    if not u.alive:
+                        continue
+                    if hasattr(u, "team") and u.team == a.team:
+                        continue
+                    dx = u.x - tx
+                    dy = u.y - ty
+                    dsq = dx * dx + dy * dy
+                    if dsq <= u.radius * u.radius and dsq < _best_dsq:
+                        _best_dsq = dsq
+                        direct_hit = u
+
+                if direct_hit is not None:
+                    was_alive = direct_hit.alive
+                    direct_hit.take_damage(a_dmg)
+                    if stats is not None:
+                        tt = direct_hit.team if hasattr(direct_hit, "team") else 0
+                        if tt:
+                            stats.record_damage(a.team, tt, a_dmg)
+                            if was_alive and not direct_hit.alive:
+                                stats.record_kill(a.team, tt)
+
+                # Splash to all enemies near impact (excluding direct hit unit)
+                if wpn.splash_radius > 0:
+                    splash_r_sq = wpn.splash_radius * wpn.splash_radius
+                    if quadfield is not None:
+                        _scands = quadfield.get_enemy_units_exact(
+                            tx, ty, wpn.splash_radius, a.team)
+                    else:
+                        _scands = units
+                    for u in _scands:
+                        if u is direct_hit or not u.alive:
+                            continue
+                        if hasattr(u, "team") and u.team == a.team:
+                            continue
+                        dx = u.x - tx
+                        dy = u.y - ty
+                        dsq = dx * dx + dy * dy
+                        if dsq > splash_r_sq:
+                            continue
+                        t_frac = math.sqrt(dsq) / wpn.splash_radius
+                        splash_dmg = wpn.splash_damage_max + t_frac * (
+                            wpn.splash_damage_min - wpn.splash_damage_max)
+                        was_alive = u.alive
+                        u.take_damage(splash_dmg)
+                        if stats is not None:
+                            ut = u.team if hasattr(u, "team") else 0
+                            if ut:
+                                stats.record_damage(a.team, ut, splash_dmg)
+                                if was_alive and not u.alive:
+                                    stats.record_kill(a.team, ut)
+                    if splash_effects is not None:
+                        splash_effects.append(SplashEffect(tx, ty, wpn.splash_radius))
+
+                for ability in a.abilities:
+                    ability.on_fire(a)
+                lc = wpn.laser_color
+                w = wpn.laser_width
+                # Beam endpoint is the locked world position (no target tracking)
+                laser_flashes.append(
+                    LaserFlash(ax, ay, tx, ty, lc, w,
+                               source=a, target=None,
+                               duration=wpn.laser_flash_duration)
+                )
+                if sounds is not None:
+                    snd = sounds.get(wpn.sound)
+                    if snd is not None:
+                        snd.set_volume(audio.master_volume)
+                        snd.play()
+            continue  # skip normal combat logic while charging or just fired
+
+        # -- Normal combat logic ----------------------------------------------
         best_target = None
 
         if a.laser_cooldown <= 0:
@@ -190,7 +278,12 @@ def combat_step(
                                 best_target = enemy
 
         if best_target is not None:
-            if a_dmg < 0:
+            if wpn.charge_time > 0:
+                # Initiate charge — lock onto target's CURRENT world position
+                a._charge_pos = (best_target.x, best_target.y)
+                a._charge_timer = wpn.charge_time
+                # Cooldown starts only after the shot fires, not now
+            elif a_dmg < 0:
                 # Healing weapon
                 heal_amt = abs(a_dmg)
                 old_hp = best_target.hp
@@ -198,8 +291,24 @@ def combat_step(
                 actual = best_target.hp - old_hp
                 if stats is not None and actual > 0:
                     stats.record_healing(a.team, actual)
+
+                a.laser_cooldown = a_cd
+                for ability in a.abilities:
+                    ability.on_fire(a)
+                lc = wpn.laser_color
+                w = wpn.laser_width
+                laser_flashes.append(
+                    LaserFlash(ax, ay, best_target.x, best_target.y, lc, w,
+                               source=a, target=best_target,
+                               duration=wpn.laser_flash_duration)
+                )
+                if sounds is not None:
+                    snd = sounds.get(wpn.sound)
+                    if snd is not None:
+                        snd.set_volume(audio.master_volume)
+                        snd.play()
             else:
-                # Damage weapon
+                # Immediate damage weapon
                 was_alive = best_target.alive
                 best_target.take_damage(a_dmg)
                 if stats is not None:
@@ -209,31 +318,64 @@ def combat_step(
                         if was_alive and not best_target.alive:
                             stats.record_kill(a.team, target_team)
 
-            a.laser_cooldown = a_cd
-            for ability in a.abilities:
-                ability.on_fire(a)
-            lc = wpn.laser_color
-            w = wpn.laser_width
-            laser_flashes.append(
-                LaserFlash(ax, ay, best_target.x, best_target.y, lc, w,
-                           source=a, target=best_target)
-            )
-            if sounds is not None:
-                snd = sounds.get(wpn.sound)
-                if snd is not None:
-                    snd.set_volume(audio.master_volume)
-                    snd.play()
+                # Splash damage for immediate-fire weapons with splash
+                if wpn.splash_radius > 0:
+                    tx, ty = best_target.x, best_target.y
+                    splash_r_sq = wpn.splash_radius * wpn.splash_radius
+                    if quadfield is not None:
+                        splash_candidates = quadfield.get_enemy_units_exact(
+                            tx, ty, wpn.splash_radius, a.team)
+                    else:
+                        splash_candidates = units
+                    for u in splash_candidates:
+                        if u is best_target or not u.alive:
+                            continue
+                        dx = u.x - tx
+                        dy = u.y - ty
+                        dsq = dx * dx + dy * dy
+                        if dsq > splash_r_sq:
+                            continue
+                        t = math.sqrt(dsq) / wpn.splash_radius
+                        splash_dmg = wpn.splash_damage_max + t * (
+                            wpn.splash_damage_min - wpn.splash_damage_max)
+                        was_alive = u.alive
+                        u.take_damage(splash_dmg)
+                        if stats is not None:
+                            ut = u.team if hasattr(u, "team") else 0
+                            if ut:
+                                stats.record_damage(a.team, ut, splash_dmg)
+                                if was_alive and not u.alive:
+                                    stats.record_kill(a.team, ut)
+                    if splash_effects is not None:
+                        splash_effects.append(SplashEffect(
+                            tx, ty, wpn.splash_radius))
 
-            # Chain initiation
-            if pending_chains is not None and wpn.chain_range > 0 and a_dmg > 0:
-                pending_chains.append(PendingChain(
-                    source=a,
-                    weapon=wpn,
-                    last_target=best_target,
-                    hit_set={a.entity_id, best_target.entity_id},
-                    delay=wpn.chain_delay,
-                    team=a.team,
-                ))
+                a.laser_cooldown = a_cd
+                for ability in a.abilities:
+                    ability.on_fire(a)
+                lc = wpn.laser_color
+                w = wpn.laser_width
+                laser_flashes.append(
+                    LaserFlash(ax, ay, best_target.x, best_target.y, lc, w,
+                               source=a, target=best_target,
+                               duration=wpn.laser_flash_duration)
+                )
+                if sounds is not None:
+                    snd = sounds.get(wpn.sound)
+                    if snd is not None:
+                        snd.set_volume(audio.master_volume)
+                        snd.play()
+
+                # Chain initiation
+                if pending_chains is not None and wpn.chain_range > 0 and a_dmg > 0:
+                    pending_chains.append(PendingChain(
+                        source=a,
+                        weapon=wpn,
+                        last_target=best_target,
+                        hit_set={a.entity_id, best_target.entity_id},
+                        delay=wpn.chain_delay,
+                        team=a.team,
+                    ))
         else:
             if wpn.hits_only_friendly:
                 # Healer: rotate toward nearest wounded ally in LOS range so
