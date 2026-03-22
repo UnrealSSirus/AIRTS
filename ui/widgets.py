@@ -158,10 +158,10 @@ class BackButton:
 # ---------------------------------------------------------------------------
 
 class Dropdown:
-    """Click-to-expand dropdown selector."""
+    """Click-to-expand dropdown selector with scrolling support."""
 
     def __init__(self, x: int, y: int, w: int, choices: list[tuple[str, str]],
-                 selected_index: int = 0):
+                 selected_index: int = 0, max_visible: int = 8):
         """choices: list of (value, display_label) tuples."""
         self.x = x
         self.y = y
@@ -171,6 +171,8 @@ class Dropdown:
         self.selected_index = selected_index
         self.open = False
         self.visible = True
+        self._max_visible = max_visible
+        self._scroll_offset = 0
 
     @property
     def value(self) -> str:
@@ -182,23 +184,42 @@ class Dropdown:
     def header_rect(self) -> pygame.Rect:
         return pygame.Rect(self.x, self.y, self.w, self.h)
 
+    def _list_y(self) -> int:
+        """Y coordinate for the top of the open list; opens upward if needed."""
+        n = min(self._max_visible, len(self.choices))
+        screen_h = pygame.display.get_surface().get_height()
+        if self.y + self.h + n * self.h > screen_h:
+            return self.y - n * self.h  # open upward
+        return self.y + self.h
+
     def handle_event(self, event: pygame.event.Event) -> bool:
         """Return True if selection changed."""
         if not self.visible:
             return False
+        if event.type == pygame.MOUSEWHEEL and self.open:
+            max_scroll = max(0, len(self.choices) - self._max_visible)
+            self._scroll_offset = max(0, min(max_scroll, self._scroll_offset - event.y))
+            return True
         if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
             if self.open:
-                for i, _ in enumerate(self.choices):
-                    r = pygame.Rect(self.x, self.y + (i + 1) * self.h,
-                                    self.w, self.h)
+                n = min(self._max_visible, len(self.choices))
+                ly = self._list_y()
+                for i in range(n):
+                    r = pygame.Rect(self.x, ly + i * self.h, self.w, self.h)
                     if r.collidepoint(event.pos):
-                        self.selected_index = i
+                        self.selected_index = self._scroll_offset + i
                         self.open = False
                         return True
                 self.open = False
             else:
                 if self.header_rect.collidepoint(event.pos):
                     self.open = True
+                    # Scroll so the selected item is visible
+                    n = min(self._max_visible, len(self.choices))
+                    self._scroll_offset = max(0, min(
+                        self.selected_index,
+                        len(self.choices) - n,
+                    ))
         return False
 
     def draw(self, surface: pygame.Surface):
@@ -224,15 +245,31 @@ class Dropdown:
         surface.blit(arrow, (hr.right - 20, hr.centery - arrow.get_height() // 2))
 
         if self.open:
-            for i, (_, display) in enumerate(self.choices):
-                r = pygame.Rect(self.x, self.y + (i + 1) * self.h,
-                                self.w, self.h)
+            n = min(self._max_visible, len(self.choices))
+            ly = self._list_y()
+            can_scroll_up   = self._scroll_offset > 0
+            can_scroll_down = self._scroll_offset + n < len(self.choices)
+            for i in range(n):
+                choice_idx = self._scroll_offset + i
+                _, display = self.choices[choice_idx]
+                r = pygame.Rect(self.x, ly + i * self.h, self.w, self.h)
                 hover = r.collidepoint(mx, my)
                 bg = DD_HOVER if hover else DD_BG
                 pygame.draw.rect(surface, bg, r)
                 pygame.draw.rect(surface, DD_BORDER, r, 1)
                 t = font.render(display, True, DD_TEXT)
                 surface.blit(t, (r.x + 8, r.centery - t.get_height() // 2))
+                # Scroll indicator triangles on first/last visible row
+                cx = r.right - 10
+                cy = r.centery
+                if i == 0 and can_scroll_up:
+                    pygame.draw.polygon(surface, DD_TEXT, [
+                        (cx - 5, cy + 3), (cx + 5, cy + 3), (cx, cy - 4),
+                    ])
+                elif i == n - 1 and can_scroll_down:
+                    pygame.draw.polygon(surface, DD_TEXT, [
+                        (cx - 5, cy - 3), (cx + 5, cy - 3), (cx, cy + 4),
+                    ])
 
 
 # ---------------------------------------------------------------------------

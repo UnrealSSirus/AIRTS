@@ -38,6 +38,19 @@ SCOUT_SYMBOL = (
     (0, -12), (8, 4), (-8, 4),
 )
 
+ARTILLERY_SYMBOL = (
+    (0, -12),
+    (4.755, -3.881),
+    (11.417, -3.804),
+    (6.18, 1.902),
+    (7.608, 9.511),
+    (0, 5),
+    (-7.608, 9.511),
+    (-6.18, 1.902),
+    (-11.417, -3.804),
+    (-4.755, -3.881),
+)
+
 # -- type registry -----------------------------------------------------------
 
 UNIT_TYPES = {
@@ -90,6 +103,19 @@ UNIT_TYPES = {
             "name": "ChainLaser", "damage": 5, "range": 60, "cooldown": 3.0,
             "chain_range": 70.0, "chain_delay": 0.2,
         },
+    },
+    "artillery": {
+        "hp": 50, "speed": 20, "radius": 10,
+        "symbol": ARTILLERY_SYMBOL, "can_attack": True,
+        "fov": 15, "turn_rate": 45, "los": 250,
+        "weapon": {
+            "name": "ArtilleryCannon", "damage": 100, "range": 200, "cooldown": 5.0,
+            "splash_radius": 40, "splash_damage_max": 50, "splash_damage_min": 0,
+            "charge_time": 2.0,
+            "sound": "artillery",
+            "laser_width": 6,
+            "laser_flash_duration": 2.5,
+        }
     },
     "command_center": {
         "hp": 1000, "speed": 0, "radius": 10,

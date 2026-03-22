@@ -5,11 +5,12 @@ import random
 import time
 from typing import Any
 import pygame
+import pygame.sndarray
 
 from entities.base import Entity
 from entities.unit import Unit
 from entities.command_center import CommandCenter
-from entities.laser import LaserFlash
+from entities.laser import LaserFlash, SplashEffect
 from systems.combat import combat_step, PendingChain
 from systems.physics import clamp_units_to_bounds
 from systems.spawning import spawn_step
@@ -160,6 +161,7 @@ class Game:
 
         self.entities: list[Entity] = []
         self.laser_flashes: list[LaserFlash] = []
+        self.splash_effects: list[SplashEffect] = []
         self._pending_chains: list[PendingChain] = []
 
         # -- sounds -----------------------------------------------------------
@@ -169,6 +171,25 @@ class Game:
                 "fast_laser": pygame.mixer.Sound(os.path.join(_sounds_dir, "fast_laser.mp3")),
                 "laser": pygame.mixer.Sound(os.path.join(_sounds_dir, "laser.mp3")),
             }
+            # Generate "artillery" sound: pitch-shift laser.mp3 down ~8 semitones
+            # by stretching the raw PCM array 1.7x longer.
+            try:
+                _base = pygame.mixer.Sound(os.path.join(_sounds_dir, "laser.mp3"))
+                _arr = pygame.sndarray.array(_base)
+                _factor = 1.7  # slower = lower pitch
+                _n = int(len(_arr) * _factor)
+                _idx = np.linspace(0, len(_arr) - 1, _n).astype(np.int32)
+                _heavy = _arr[_idx]
+                # Boost amplitude by 40% and clip to dtype range
+                _heavy_f = _heavy.astype(np.float32) * 1.4
+                if np.issubdtype(_arr.dtype, np.integer):
+                    _info = np.iinfo(_arr.dtype)
+                    _heavy = np.clip(_heavy_f, _info.min, _info.max).astype(_arr.dtype)
+                else:
+                    _heavy = np.clip(_heavy_f, -1.0, 1.0).astype(_arr.dtype)
+                self._sounds["artillery"] = pygame.sndarray.make_sound(_heavy)
+            except Exception:
+                self._sounds["artillery"] = self._sounds["laser"]
         else:
             self._sounds: dict[str, pygame.mixer.Sound] = {}
 
@@ -859,6 +880,7 @@ class Game:
         combat_step(alive_units, obstacles, self.laser_flashes, dt,
                     quadfield=self._quadfield,
                     circle_obs=self._obs_circle, rect_obs=self._obs_rect,
+                    splash_effects=None if self._headless else self.splash_effects,
                     sounds=None if self._headless else self._sounds,
                     pending_chains=self._pending_chains, stats=self._stats)
         self._stats.record_subsystem("combat", (_perf() - _t) * 1000)
@@ -961,6 +983,7 @@ class Game:
 
         _t = _perf()
         self.laser_flashes = [lf for lf in self.laser_flashes if lf.update(dt)]
+        self.splash_effects = [se for se in self.splash_effects if se.update(dt)]
         self._iteration += 1
 
         # Sample stats time-series every SAMPLE_INTERVAL ticks
@@ -1117,6 +1140,32 @@ class Game:
             self._draw_fog()
 
         if self._phase != "warp_in":
+            # Charge previews: targeting beam + splash zone while artillery charges
+            for unit in self.units:
+                if not unit.alive or unit._charge_pos is None or unit.weapon is None:
+                    continue
+                tx, ty = unit._charge_pos
+                wpn = unit.weapon
+                charge_frac = 1.0 - unit._charge_timer / wpn.charge_time
+                beam_alpha = int(80 + 80 * charge_frac)
+                ring_alpha = int(60 + 80 * charge_frac)
+
+                # Targeting beam
+                _ct = pygame.Surface(ws.get_size(), pygame.SRCALPHA)
+                pygame.draw.line(_ct, (255, 160, 30, beam_alpha),
+                                 (unit.x, unit.y), (tx, ty), wpn.laser_width)
+                ws.blit(_ct, (0, 0))
+
+                # Splash zone ring
+                vis_r = int(wpn.splash_radius)
+                if vis_r > 0:
+                    _cr = pygame.Surface((vis_r * 2 + 4, vis_r * 2 + 4), pygame.SRCALPHA)
+                    pygame.draw.circle(_cr, (255, 100, 30, ring_alpha),
+                                       (vis_r + 2, vis_r + 2), vis_r, 2)
+                    ws.blit(_cr, (int(tx) - vis_r - 2, int(ty) - vis_r - 2))
+
+            for se in self.splash_effects:
+                se.draw(ws)
             for lf in self.laser_flashes:
                 lf.draw(ws)
 
