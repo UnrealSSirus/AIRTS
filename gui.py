@@ -12,8 +12,9 @@ from config.settings import (
     PLAYER_COLORS, TEAM1_SELECTED_COLOR,
     HEALTH_BAR_FG, HEALTH_BAR_LOW, HEALTH_BAR_BG,
     CC_SPAWN_INTERVAL,
+    T2_UPGRADE_DURATION,
 )
-from config.unit_types import UNIT_TYPES, get_spawnable_types
+from config.unit_types import UNIT_TYPES, get_spawnable_types, get_t2_name
 from core.helpers import hexagon_points
 
 # ── colours ──────────────────────────────────────────────────────────
@@ -55,6 +56,16 @@ def _font(size: int) -> pygame.font.Font:
 
 def _display_name(unit_type: str) -> str:
     return unit_type.replace("_", " ").title()
+
+
+_T2_CHEVRON_COLOR = (255, 220, 60)
+
+
+def _draw_t2_chevron(screen: pygame.Surface, x: int, y: int, size: int = 6):
+    """Draw a small yellow upward chevron (^) at the given position."""
+    half = size // 2
+    pts = [(x - half, y + half), (x, y - half), (x + half, y + half)]
+    pygame.draw.lines(screen, _T2_CHEVRON_COLOR, False, pts, 2)
 
 
 # ── queries ──────────────────────────────────────────────────────────
@@ -114,19 +125,52 @@ def _action_btn_rects(ar: pygame.Rect) -> list[tuple[pygame.Rect, str, str]]:
     return out
 
 
+_UPGRADE_BTN_W = 90
+_UPGRADE_BTN_H = 30
+_UPGRADE_BTN_GAP = 6
+
+
+def _upgrade_btn_rects(ar: pygame.Rect) -> list[tuple[pygame.Rect, str, str]]:
+    """Button rects for Watch Tower / Research Lab upgrade options."""
+    options = [("watch_tower", "Watch Tower"), ("research_lab", "Research Lab")]
+    pad, hdr = 8, 22
+    out: list[tuple[pygame.Rect, str, str]] = []
+    for i, (path, label) in enumerate(options):
+        bx = ar.left + pad
+        by = ar.top + pad + hdr + i * (_UPGRADE_BTN_H + _UPGRADE_BTN_GAP)
+        out.append((pygame.Rect(bx, by, _UPGRADE_BTN_W, _UPGRADE_BTN_H), path, label))
+    return out
+
+
+def _research_btn_rects(ar: pygame.Rect) -> list[tuple[pygame.Rect, str]]:
+    """Button rects for research lab unit type selection."""
+    types = list(get_spawnable_types().keys())
+    pad, hdr = 8, 22
+    iw = ar.width - pad * 2
+    cols = max(1, (iw + _BUILD_BTN_GAP) // (_BUILD_BTN_SIZE + _BUILD_BTN_GAP))
+    out: list[tuple[pygame.Rect, str]] = []
+    for i, ut in enumerate(types):
+        c, r = i % cols, i // cols
+        bx = ar.left + pad + c * (_BUILD_BTN_SIZE + _BUILD_BTN_GAP)
+        by = ar.top + pad + hdr + r * (_BUILD_BTN_SIZE + _BUILD_BTN_GAP)
+        out.append((pygame.Rect(bx, by, _BUILD_BTN_SIZE, _BUILD_BTN_SIZE), ut))
+    return out
+
+
 # ── drawing ──────────────────────────────────────────────────────────
 
 def draw_hud(screen: pygame.Surface, entities: list[Entity],
-             width: int, height: int, hud_h: int):
+             width: int, height: int, hud_h: int,
+             enable_t2: bool = False, t2_upgrades: dict | None = None):
     """Draw the full HUD bar at the bottom of the screen."""
     minimap, display, portrait, action = _hud_sections(width, height, hud_h)
     selected = _get_selected(entities)
     cc = get_selected_cc(entities)
 
     _draw_minimap(screen, minimap)
-    _draw_display(screen, display, selected)
+    _draw_display(screen, display, selected, t2_upgrades=t2_upgrades)
     _draw_portrait(screen, portrait, selected)
-    _draw_actions(screen, action, selected, cc)
+    _draw_actions(screen, action, selected, cc, enable_t2=enable_t2, t2_upgrades=t2_upgrades)
 
     # vertical dividers
     for r in (minimap, display, portrait):
@@ -144,7 +188,7 @@ def _draw_minimap(screen: pygame.Surface, r: pygame.Rect):
 # ── unit / group display ────────────────────────────────────────────
 
 def _draw_display(screen: pygame.Surface, r: pygame.Rect,
-                  selected: list[Unit]):
+                  selected: list[Unit], t2_upgrades: dict | None = None):
     pygame.draw.rect(screen, _SECTION_BG, r)
     if not selected:
         return
@@ -152,18 +196,25 @@ def _draw_display(screen: pygame.Surface, r: pygame.Rect,
     inner = pygame.Rect(r.left + pad, r.top + pad,
                         r.width - pad * 2, r.height - pad * 2)
     if len(selected) == 1:
-        _draw_single_info(screen, inner, selected[0])
+        _draw_single_info(screen, inner, selected[0], t2_upgrades=t2_upgrades)
     else:
         _draw_group_grid(screen, inner, selected)
 
 
-def _draw_single_info(screen: pygame.Surface, r: pygame.Rect, unit: Unit):
+def _draw_single_info(screen: pygame.Surface, r: pygame.Rect, unit: Unit,
+                      t2_upgrades: dict | None = None):
     tf = _font(18)
     sf = _font(16)
     y = r.top
 
     # name
-    ns = tf.render(_display_name(unit.unit_type), True, _TITLE_COLOR)
+    if isinstance(unit, MetalExtractor) and unit.upgrade_state in ("watch_tower", "research_lab"):
+        name = unit.upgrade_state.replace("_", " ").title()
+    elif getattr(unit, "is_t2", False):
+        name = get_t2_name(unit.unit_type)
+    else:
+        name = _display_name(unit.unit_type)
+    ns = tf.render(name, True, _TITLE_COLOR)
     screen.blit(ns, (r.left, y))
     y += ns.get_height() + 4
 
@@ -195,12 +246,23 @@ def _draw_single_info(screen: pygame.Surface, r: pygame.Rect, unit: Unit):
         bp = unit.get_total_bonus_percent()
         if bp > 0:
             rows.append(("Bonus", f"+{bp}%"))
-        rows.append(("Spawn", _display_name(unit.spawn_type)))
+        cc_team_t2 = (t2_upgrades or {}).get(unit.team, set())
+        spawn_name = (get_t2_name(unit.spawn_type)
+                      if unit.spawn_type in cc_team_t2
+                      else _display_name(unit.spawn_type))
+        rows.append(("Spawn", spawn_name))
         progress = min(unit._spawn_timer / CC_SPAWN_INTERVAL, 1.0)
         rows.append(("Ready", f"{int(progress * 100)}%"))
     if isinstance(unit, MetalExtractor):
         b = unit.get_spawn_bonus()
         rows.append(("Bonus", f"+{round(b * 100)}%"))
+        if unit.upgrade_state.startswith("upgrading"):
+            secs = max(0, int(unit.upgrade_timer))
+            rows.append(("Upgrade", f"{secs}s"))
+        elif unit.upgrade_state == "choosing_research":
+            rows.append(("Status", "Select unit"))
+        elif unit.upgrade_state == "research_lab" and unit.researched_unit_type:
+            rows.append(("Research", get_t2_name(unit.researched_unit_type)))
 
     # Abilities
     for ab in unit.abilities:
@@ -269,6 +331,10 @@ def _draw_group_grid(screen: pygame.Surface, r: pygame.Rect,
         else:
             pygame.draw.circle(screen, base_color, (cx, cy), bs // 5)
 
+        # T2 chevron indicator
+        if getattr(unit, "is_t2", False):
+            _draw_t2_chevron(screen, box.right - 4, box.top + 4, size=5)
+
         # hp bar below box
         hp = unit.hp / unit.max_hp if unit.max_hp > 0 else 0
         hy = by + bs + 1
@@ -322,7 +388,13 @@ def _draw_portrait(screen: pygame.Surface, r: pygame.Rect,
         pygame.draw.circle(screen, TEAM1_SELECTED_COLOR, (cx, cy), rad, 1)
 
     # name below portrait
-    nt = nf.render(_display_name(unit.unit_type), True, _STAT_LABEL)
+    if isinstance(unit, MetalExtractor) and unit.upgrade_state in ("watch_tower", "research_lab"):
+        pname = unit.upgrade_state.replace("_", " ").title()
+    elif getattr(unit, "is_t2", False):
+        pname = get_t2_name(unit.unit_type)
+    else:
+        pname = _display_name(unit.unit_type)
+    nt = nf.render(pname, True, _STAT_LABEL)
     nx = cx - nt.get_width() // 2
     ny = r.bottom - pad - label_h
     screen.blit(nt, (nx, ny))
@@ -331,7 +403,8 @@ def _draw_portrait(screen: pygame.Surface, r: pygame.Rect,
 # ── actions / build panel ────────────────────────────────────────────
 
 def _draw_actions(screen: pygame.Surface, r: pygame.Rect,
-                  selected: list[Unit], cc: CommandCenter | None):
+                  selected: list[Unit], cc: CommandCenter | None,
+                  enable_t2: bool = False, t2_upgrades: dict | None = None):
     pygame.draw.rect(screen, _SECTION_BG, r)
     if not selected:
         return
@@ -344,6 +417,7 @@ def _draw_actions(screen: pygame.Surface, r: pygame.Rect,
         # Build options
         ts = tf.render("Build", True, _TITLE_COLOR)
         screen.blit(ts, (r.left + 8, r.top + 6))
+        cc_team_t2 = (t2_upgrades or {}).get(cc.team, set()) if enable_t2 else set()
 
         for br, ut in _build_btn_rects(r):
             is_sel = cc.spawn_type == ut
@@ -369,8 +443,18 @@ def _draw_actions(screen: pygame.Surface, r: pygame.Rect,
                 pygame.draw.circle(screen, PLAYER_COLORS[0], (cx, cy), 7)
                 pygame.draw.circle(screen, TEAM1_SELECTED_COLOR, (cx, cy), 7, 1)
 
+            # T2 chevron indicator
+            if ut in cc_team_t2:
+                _draw_t2_chevron(screen, br.right - 6, br.top + 6, size=6)
+
         if hovered_type is not None:
-            _draw_tooltip(screen, hovered_type, r)
+            is_t2_type = hovered_type in cc_team_t2
+            _draw_tooltip(screen, hovered_type, r, show_t2=is_t2_type)
+
+    elif enable_t2 and len(selected) == 1 and isinstance(selected[0], MetalExtractor):
+        me = selected[0]
+        _draw_extractor_actions(screen, r, me, t2_upgrades or {})
+
     else:
         # Action buttons for army units / extractors
         ts = tf.render("Actions", True, _TITLE_COLOR)
@@ -393,53 +477,189 @@ def _draw_actions(screen: pygame.Surface, r: pygame.Rect,
                              br.bottom + 2))
 
 
+def _draw_extractor_actions(screen: pygame.Surface, r: pygame.Rect,
+                            me: MetalExtractor, t2_upgrades: dict):
+    """Draw upgrade/research actions for a selected metal extractor."""
+    tf = _font(18)
+    sf = _font(14)
+    mx, my = pygame.mouse.get_pos()
+
+    if me.upgrade_state == "base" and me.is_fully_reinforced:
+        # Show Watch Tower / Research Lab upgrade buttons
+        ts = tf.render("Upgrade", True, _TITLE_COLOR)
+        screen.blit(ts, (r.left + 8, r.top + 6))
+
+        for br, path, label in _upgrade_btn_rects(r):
+            is_hov = br.collidepoint(mx, my)
+            bg = GUI_BTN_HOVER if is_hov else GUI_BTN_NORMAL
+            pygame.draw.rect(screen, bg, br, border_radius=4)
+            pygame.draw.rect(screen, GUI_BORDER, br, 1, border_radius=4)
+            lt = sf.render(label, True, GUI_TEXT_COLOR)
+            screen.blit(lt, (br.centerx - lt.get_width() // 2,
+                             br.centery - lt.get_height() // 2))
+
+    elif me.upgrade_state == "choosing_research":
+        # Show unit type grid for research selection
+        ts = tf.render("Select Research", True, _TITLE_COLOR)
+        screen.blit(ts, (r.left + 8, r.top + 6))
+        hovered_type: str | None = None
+
+        team_t2 = t2_upgrades.get(me.team, set())
+        for br, ut in _research_btn_rects(r):
+            already_t2 = ut in team_t2
+            is_hov = br.collidepoint(mx, my) and not already_t2
+            if is_hov:
+                hovered_type = ut
+            bg = (GUI_BTN_NORMAL if already_t2
+                  else GUI_BTN_HOVER if is_hov
+                  else GUI_BTN_NORMAL)
+
+            pygame.draw.rect(screen, bg, br, border_radius=4)
+            pygame.draw.rect(screen, GUI_BORDER, br, 1, border_radius=4)
+
+            st = UNIT_TYPES[ut]
+            sym = st["symbol"]
+            cx, cy = br.centerx, br.centery
+            if already_t2:
+                # Grayed out
+                color = (60, 60, 70)
+                outline = (80, 80, 90)
+            else:
+                color = PLAYER_COLORS[0]
+                outline = TEAM1_SELECTED_COLOR
+            if sym is not None:
+                sc = 0.9
+                pts = [(cx + px * sc, cy + py * sc) for px, py in sym]
+                pygame.draw.polygon(screen, color, pts)
+                pygame.draw.polygon(screen, outline, pts, 1)
+            else:
+                pygame.draw.circle(screen, color, (cx, cy), 7)
+                pygame.draw.circle(screen, outline, (cx, cy), 7, 1)
+
+        if hovered_type is not None:
+            _draw_tooltip(screen, hovered_type, r, show_t2=True)
+
+    elif me.upgrade_state.startswith("upgrading"):
+        # Show progress
+        ts = tf.render("Upgrading...", True, _TITLE_COLOR)
+        screen.blit(ts, (r.left + 8, r.top + 6))
+        secs = max(0, int(me.upgrade_timer))
+        pt = sf.render(f"{secs}s remaining", True, _STAT_VALUE)
+        screen.blit(pt, (r.left + 8, r.top + 28))
+        # Progress bar
+        bar_w = min(r.width - 16, 180)
+        bar_h = 8
+        bar_y = r.top + 48
+        progress = 1.0 - max(0.0, me.upgrade_timer / T2_UPGRADE_DURATION)
+        pygame.draw.rect(screen, (40, 40, 50), (r.left + 8, bar_y, bar_w, bar_h))
+        pygame.draw.rect(screen, (200, 200, 60), (r.left + 8, bar_y, int(bar_w * progress), bar_h))
+
+    elif me.upgrade_state == "watch_tower":
+        ts = tf.render("Watch Tower", True, _TITLE_COLOR)
+        screen.blit(ts, (r.left + 8, r.top + 6))
+
+    elif me.upgrade_state == "research_lab":
+        ts = tf.render("Research Lab", True, _TITLE_COLOR)
+        screen.blit(ts, (r.left + 8, r.top + 6))
+        if me.researched_unit_type:
+            rt = sf.render(f"Producing: {get_t2_name(me.researched_unit_type)}", True, _STAT_VALUE)
+            screen.blit(rt, (r.left + 8, r.top + 28))
+
+
 def _draw_tooltip(screen: pygame.Surface, utype: str,
-                  action_rect: pygame.Rect):
-    """Draw a stats tooltip above the action panel."""
-    stats = UNIT_TYPES[utype]
+                  action_rect: pygame.Rect, show_t2: bool = False):
+    """Draw a stats tooltip above the action panel.
+
+    When *show_t2* is True, shows the T2 name and stat values with diff
+    indicators (e.g.  ``HP  130 (+30)``) for any stat that changed.
+    """
+    t1_stats = UNIT_TYPES[utype]
+    stats = UNIT_TYPES.get(utype + "_t2", t1_stats) if show_t2 else t1_stats
     tf = _font(20)
     bf = _font(16)
 
-    rows: list[tuple[str, str]] = [
-        ("HP", str(stats["hp"])),
-        ("Speed", str(stats["speed"])),
-    ]
+    def _fmt_cd(cd):
+        return f"{cd:.1f}s" if cd != int(cd) else f"{int(cd)}s"
+
+    def _diff_str(t2_val, t1_val):
+        """Return a coloured diff suffix like ' (+30)' or '' if unchanged."""
+        if t2_val == t1_val:
+            return "", None
+        d = t2_val - t1_val
+        sign = "+" if d > 0 else ""
+        color = (100, 255, 100) if d > 0 else (255, 100, 100)
+        return f" ({sign}{d})", color
+
+    rows: list[tuple[str, str, str, tuple | None]] = []  # (label, value, diff_text, diff_color)
+
+    hp_diff, hp_c = _diff_str(stats["hp"], t1_stats["hp"]) if show_t2 else ("", None)
+    rows.append(("HP", str(stats["hp"]), hp_diff, hp_c))
+
+    spd_diff, spd_c = _diff_str(stats["speed"], t1_stats["speed"]) if show_t2 else ("", None)
+    rows.append(("Speed", str(stats["speed"]), spd_diff, spd_c))
+
     wpn = stats.get("weapon")
+    t1_wpn = t1_stats.get("weapon")
     if wpn:
         if wpn["damage"] < 0:
-            rows.append(("Heal/pulse", str(abs(wpn["damage"]))))
+            label = "Heal/pulse"
+            val = abs(wpn["damage"])
+            t1_val = abs(t1_wpn["damage"]) if t1_wpn else val
         else:
-            rows.append(("Damage", str(wpn["damage"])))
-        rows.append(("Range", str(wpn["range"])))
-        cd = wpn["cooldown"]
-        rows.append(("Cooldown", f"{cd:.1f}s" if cd != int(cd)
-                      else f"{int(cd)}s"))
+            label = "Damage"
+            val = wpn["damage"]
+            t1_val = t1_wpn["damage"] if t1_wpn else val
+        d_diff, d_c = _diff_str(val, t1_val) if show_t2 else ("", None)
+        rows.append((label, str(val), d_diff, d_c))
 
-    name = _display_name(utype)
+        r_diff, r_c = _diff_str(int(wpn["range"]), int(t1_wpn["range"])) if show_t2 and t1_wpn else ("", None)
+        rows.append(("Range", str(int(wpn["range"])), r_diff, r_c))
+
+        cd = wpn["cooldown"]
+        t1_cd = t1_wpn["cooldown"] if t1_wpn else cd
+        cd_diff, cd_c = ("", None)
+        if show_t2 and cd != t1_cd:
+            d = cd - t1_cd
+            sign = "+" if d > 0 else ""
+            cd_c = (255, 100, 100) if d > 0 else (100, 255, 100)  # longer CD is bad
+            cd_diff = f" ({sign}{d:.1f}s)"
+        rows.append(("Cooldown", _fmt_cd(cd), cd_diff, cd_c))
+
+    name = get_t2_name(utype) if show_t2 else _display_name(utype)
     tt_h = _TT_PAD + _TT_LINE_H + 4 + len(rows) * _TT_LINE_H + _TT_PAD
+    tt_w = _TT_WIDTH + (50 if show_t2 else 0)  # wider for diff text
     tt_x = action_rect.left + 10
     tt_y = action_rect.top - tt_h - 6
 
-    rect = pygame.Rect(tt_x, tt_y, _TT_WIDTH, tt_h)
+    rect = pygame.Rect(tt_x, tt_y, tt_w, tt_h)
     pygame.draw.rect(screen, _TT_BG, rect, border_radius=6)
     pygame.draw.rect(screen, _TT_BORDER, rect, 1, border_radius=6)
 
     ts = tf.render(name, True, (220, 220, 240))
     screen.blit(ts, (tt_x + _TT_PAD, tt_y + _TT_PAD))
+    # T2 chevron next to name
+    if show_t2:
+        _draw_t2_chevron(screen, tt_x + _TT_PAD + ts.get_width() + 8,
+                         tt_y + _TT_PAD + ts.get_height() // 2, size=7)
 
     ry = tt_y + _TT_PAD + _TT_LINE_H + 4
-    for label, value in rows:
+    for label, value, diff_text, diff_color in rows:
         ls = bf.render(label, True, (140, 140, 165))
         vs = bf.render(value, True, (200, 200, 220))
         screen.blit(ls, (tt_x + _TT_PAD, ry))
-        screen.blit(vs, (tt_x + _TT_WIDTH - _TT_PAD - vs.get_width(), ry))
+        vx = tt_x + _TT_PAD + 80
+        screen.blit(vs, (vx, ry))
+        if diff_text and diff_color:
+            ds = bf.render(diff_text, True, diff_color)
+            screen.blit(ds, (vx + vs.get_width(), ry))
         ry += _TT_LINE_H
 
 
 # ── click handling ───────────────────────────────────────────────────
 
 def handle_hud_click(entities: list[Entity], mx: int, my: int,
-                     width: int, height: int, hud_h: int) -> dict | None:
+                     width: int, height: int, hud_h: int,
+                     enable_t2: bool = False, t2_upgrades: dict | None = None) -> dict | None:
     """Return an action dict if a button was clicked, else None."""
     _, _, _, action = _hud_sections(width, height, hud_h)
     if not action.collidepoint(mx, my):
@@ -454,6 +674,19 @@ def handle_hud_click(entities: list[Entity], mx: int, my: int,
         for br, ut in _build_btn_rects(action):
             if br.collidepoint(mx, my):
                 return {"action": "set_spawn_type", "unit_type": ut}
+
+    elif enable_t2 and len(selected) == 1 and isinstance(selected[0], MetalExtractor):
+        me = selected[0]
+        if me.upgrade_state == "base" and me.is_fully_reinforced:
+            for br, path, _ in _upgrade_btn_rects(action):
+                if br.collidepoint(mx, my):
+                    return {"action": "upgrade_extractor", "entity_id": me.entity_id, "path": path}
+        elif me.upgrade_state == "choosing_research":
+            team_t2 = (t2_upgrades or {}).get(me.team, set())
+            for br, ut in _research_btn_rects(action):
+                if br.collidepoint(mx, my) and ut not in team_t2:
+                    return {"action": "set_research_type", "entity_id": me.entity_id, "unit_type": ut}
+
     else:
         for br, aid, _ in _action_btn_rects(action):
             if br.collidepoint(mx, my):

@@ -69,6 +69,14 @@ REACTIVE_ARMOR_MAX_STACKS = 2
 REACTIVE_ARMOR_REDUCTION = 0.5      # damage reduction per stack (50%)
 REACTIVE_ARMOR_COLOR = (200, 180, 60)
 
+# -- electric armor (T2 tank passive) -----------------------------------------
+ELECTRIC_ARMOR_INTERVAL = 1.0           # seconds per stack
+ELECTRIC_ARMOR_MAX_STACKS = 8
+ELECTRIC_ARMOR_REDUCTION = 0.60         # damage reduction per stack (60%)
+ELECTRIC_ARMOR_REGEN_PER_STACK = 1.0    # HP/s per stack
+ELECTRIC_ARMOR_SPEED_BONUS = 0.20       # +20% speed per stack
+ELECTRIC_ARMOR_COLOR = (80, 180, 255)
+
 
 # -- metal spot -------------------------------------------------------------
 METAL_SPOT_COLOR = (255, 200, 60)
@@ -89,6 +97,15 @@ REINFORCE_BONUS_MULTIPLIER = 2              # doubles bonus when fully reinforce
 REINFORCE_HP_BONUS = 100
 REINFORCE_STACK_INTERVAL = 15.0             # seconds per plating stack
 REINFORCE_MAX_STACKS = 4
+
+# -- T2 upgrade system -------------------------------------------------------
+T2_UPGRADE_DURATION = 60.0                  # seconds under construction (no spawn bonus)
+T2_SPAWN_BONUS = 0.20                       # 20% spawn bonus for Watch Tower / Research Lab
+WATCH_TOWER_HEAL_PER_SEC = 1.0
+WATCH_TOWER_LASER_RANGE = 65.0
+WATCH_TOWER_LASER_DAMAGE = 15
+WATCH_TOWER_LASER_COOLDOWN = 2.0
+RESEARCH_LAB_HP_BONUS = 100
 
 # -- health bars ------------------------------------------------------------
 HEALTH_BAR_WIDTH = 24

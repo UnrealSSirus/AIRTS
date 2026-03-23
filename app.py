@@ -148,6 +148,7 @@ class App:
         player_name: str = data.get("player_name", "Unnamed Player")
         headless: bool = data.get("headless", False)
         save_debug_summary: bool = data.get("save_debug_summary", False)
+        enable_t2: bool = data.get("enable_t2", False)
         time_limit: int = data.get("time_limit", 0)  # minutes, 0 = no limit
         max_ticks = time_limit * 60 * 60 if time_limit > 0 else 0  # 60 ticks/sec
 
@@ -200,6 +201,7 @@ class App:
             save_debug_summary=save_debug_summary,
             screen_width=screen_w,
             screen_height=screen_h,
+            enable_t2=enable_t2,
         )
 
         try:

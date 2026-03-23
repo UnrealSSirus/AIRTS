@@ -9,6 +9,12 @@ from config.settings import (
     REACTIVE_ARMOR_MAX_STACKS,
     REACTIVE_ARMOR_REDUCTION,
     REACTIVE_ARMOR_COLOR,
+    ELECTRIC_ARMOR_INTERVAL,
+    ELECTRIC_ARMOR_MAX_STACKS,
+    ELECTRIC_ARMOR_REDUCTION,
+    ELECTRIC_ARMOR_REGEN_PER_STACK,
+    ELECTRIC_ARMOR_SPEED_BONUS,
+    ELECTRIC_ARMOR_COLOR,
 )
 import pygame
 
@@ -197,10 +203,89 @@ class Focus(PassiveAbility):
         return obj
 
 
+class ElectricArmor(PassiveAbility):
+    name = "electric_armor"
+    description = "Gains a stack every second (max 8). Each stack: 60% damage reduction, +1 HP/s regen, +20% speed. Loses one stack when hit."
+
+    def __init__(self):
+        super().__init__()
+        self.stacks: int = 0
+        self.max_stacks: int = ELECTRIC_ARMOR_MAX_STACKS
+        self.stack_interval: float = ELECTRIC_ARMOR_INTERVAL
+        self.stack_timer: float = 0.0
+        self._base_speed: float = 0.0
+
+    def update(self, entity, dt: float) -> None:
+        # Capture base speed on first update
+        if self._base_speed == 0.0:
+            self._base_speed = entity.speed
+
+        # Build stacks
+        if self.stacks < self.max_stacks:
+            self.stack_timer += dt
+            while self.stack_timer >= self.stack_interval and self.stacks < self.max_stacks:
+                self.stack_timer -= self.stack_interval
+                self.stacks += 1
+
+        # Passive regen: 1 HP/s per stack
+        if self.stacks > 0 and entity.hp < entity.max_hp:
+            heal = ELECTRIC_ARMOR_REGEN_PER_STACK * self.stacks * dt
+            entity.hp = min(entity.max_hp, entity.hp + heal)
+
+        # Speed bonus: +20% per stack
+        entity.speed = self._base_speed * (1.0 + ELECTRIC_ARMOR_SPEED_BONUS * self.stacks)
+
+    def modify_damage(self, amount: float, entity) -> float:
+        if self.stacks <= 0:
+            return amount
+        reduction = min(self.stacks * ELECTRIC_ARMOR_REDUCTION, 1.0)
+        self.stacks -= 1
+        self.stack_timer = 0.0
+        return amount * (1.0 - reduction)
+
+    def draw(self, entity, surface: pygame.Surface) -> None:
+        if self.stacks <= 0:
+            return
+        # Draw small diamond indicators above the unit, one per stack
+        y_off = entity.radius + 6
+        spacing = 5
+        start_x = entity.x - (self.stacks - 1) * spacing / 2
+        for i in range(self.stacks):
+            cx = start_x + i * spacing
+            cy = entity.y - y_off
+            size = 2
+            points = [
+                (cx, cy - size),
+                (cx + size, cy),
+                (cx, cy + size),
+                (cx - size, cy),
+            ]
+            pygame.draw.polygon(surface, ELECTRIC_ARMOR_COLOR, points)
+
+    def to_dict(self) -> dict:
+        d = super().to_dict()
+        d.update({
+            "stacks": self.stacks,
+            "stack_timer": self.stack_timer,
+            "_base_speed": self._base_speed,
+        })
+        return d
+
+    @classmethod
+    def from_dict(cls, data: dict) -> ElectricArmor:
+        obj = cls()
+        obj.active = data.get("active", False)
+        obj.stacks = data.get("stacks", 0)
+        obj.stack_timer = data.get("stack_timer", 0.0)
+        obj._base_speed = data.get("_base_speed", 0.0)
+        return obj
+
+
 ABILITY_REGISTRY: dict[str, type[PassiveAbility]] = {
     "reinforce": Reinforce,
     "reactive_armor": ReactiveArmor,
     "focus": Focus,
+    "electric_armor": ElectricArmor,
 }
 
 

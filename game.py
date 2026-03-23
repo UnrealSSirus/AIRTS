@@ -102,6 +102,7 @@ class Game:
         screen_height: int | None = None,
         is_multiplayer: bool = False,
         selectable_teams: set[int] | None = None,
+        enable_t2: bool = False,
     ):
         """
         *team_ai* maps team numbers to AI controllers.  Teams **not** present
@@ -153,6 +154,7 @@ class Game:
         self._max_ticks = max_ticks
         self._save_replay = save_replay
         self._save_debug_summary = save_debug_summary
+        self.enable_t2 = enable_t2
         self._step_timeout_ms = step_timeout_ms
         self._replay_output_dir = replay_output_dir
         self._player_name = player_name
@@ -256,6 +258,9 @@ class Game:
 
         self._command_queue = CommandQueue()
 
+        # T2 upgrade tracking: team → set of unit_type strings upgraded to T2
+        self._t2_upgrades: dict[int, set[str]] = {t: set() for t in self.all_teams}
+
         self._apply_selectability()
         self._bind_and_start_ais()
 
@@ -326,6 +331,14 @@ class Game:
         for e in self.entities:
             if hasattr(e, "team") and hasattr(e, "selectable"):
                 e.selectable = e.team in self._selectable_teams
+
+    def _refresh_t2_upgrades(self):
+        """Rebuild T2 upgrade sets from living Research Labs."""
+        for t in self.all_teams:
+            self._t2_upgrades[t] = set()
+        for me in self.metal_extractors:
+            if me.alive and me.upgrade_state == "research_lab" and me.researched_unit_type:
+                self._t2_upgrades[me.team].add(me.researched_unit_type)
 
     def _bind_and_start_ais(self):
         for pid, ai in self.player_ai.items():
@@ -549,20 +562,6 @@ class Game:
                 self._toggle_pause()
                 continue
 
-            # Click anywhere while paused → unpause
-            if (self._paused
-                    and event.type == pygame.MOUSEBUTTONDOWN
-                    and event.button == 1):
-                self._toggle_pause()
-                continue
-
-            if self._speed_slider.handle_event(event):
-                self._speed_multiplier = self._speed_slider.value / 100.0
-
-            if self._reset_cam_btn.handle_event(event):
-                self._camera.reset()
-                continue
-
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     if self._paused:
@@ -571,8 +570,9 @@ class Game:
                         self.running = False
                     else:
                         self._toggle_pause()
+                    continue
 
-            # Scroll wheel zoom (available always, not just for human)
+            # Scroll wheel zoom (available always, even while paused)
             if event.type == pygame.MOUSEWHEEL:
                 mx, my = pygame.mouse.get_pos()
                 if self._game_area.collidepoint(mx, my):
@@ -583,7 +583,7 @@ class Game:
                     elif event.y < 0:
                         self._camera.zoom_at(vx, vy, 1.0 / CAMERA_ZOOM_STEP)
 
-            # Middle mouse pan
+            # Middle mouse pan (available always, even while paused)
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 2:
                 if self._game_area.collidepoint(event.pos):
                     self._mid_dragging = True
@@ -596,6 +596,17 @@ class Game:
                 self._camera.pan(dx, dy)
                 self._mid_last = event.pos
 
+            # Skip all other input while paused (use pause button or ESC)
+            if self._paused:
+                continue
+
+            if self._speed_slider.handle_event(event):
+                self._speed_multiplier = self._speed_slider.value / 100.0
+
+            if self._reset_cam_btn.handle_event(event):
+                self._camera.reset()
+                continue
+
             if not self._has_human:
                 continue
 
@@ -605,6 +616,7 @@ class Game:
                     hud_result = gui.handle_hud_click(
                         self.entities, event.pos[0], event.pos[1],
                         self._screen_width, self._screen_height, self._hud_h,
+                        enable_t2=self.enable_t2, t2_upgrades=self._t2_upgrades,
                     )
                     if hud_result is not None:
                         self._handle_hud_action(hud_result)
@@ -711,6 +723,32 @@ class Game:
                 if isinstance(e, CommandCenter) and e.player_id == cmd.player_id:
                     e.spawn_type = data["unit_type"]
 
+        elif cmd.type == "upgrade_extractor":
+            entity = id_map.get(data["entity_id"])
+            path = data["path"]  # "watch_tower" or "research_lab"
+            if (isinstance(entity, MetalExtractor)
+                    and entity.alive
+                    and entity.upgrade_state == "base"
+                    and entity.is_fully_reinforced
+                    and entity.team == self.player_team.get(cmd.player_id)
+                    and self.enable_t2):
+                if path == "watch_tower":
+                    entity.start_upgrade("tower")
+                elif path == "research_lab":
+                    entity.upgrade_state = "choosing_research"
+
+        elif cmd.type == "set_research_type":
+            entity = id_map.get(data["entity_id"])
+            unit_type = data["unit_type"]
+            if (isinstance(entity, MetalExtractor)
+                    and entity.alive
+                    and entity.upgrade_state == "choosing_research"
+                    and entity.team == self.player_team.get(cmd.player_id)
+                    and self.enable_t2
+                    and unit_type not in self._t2_upgrades.get(entity.team, set())):
+                entity.researched_unit_type = unit_type
+                entity.start_upgrade("lab")
+
     def _handle_hud_action(self, result: dict):
         """Process an action dict returned by gui.handle_hud_click."""
         action = result["action"]
@@ -736,6 +774,37 @@ class Game:
                         player_id=pid,
                         tick=self._iteration,
                         data={"unit_ids": uids},
+                    ))
+        elif action == "upgrade_extractor":
+            eid = result["entity_id"]
+            path = result["path"]
+            # Find the player_id of a human on the extractor's team
+            me = next((e for e in self.entities
+                       if isinstance(e, MetalExtractor) and e.entity_id == eid), None)
+            if me is not None:
+                pid = next((p for p in self.human_players
+                            if self.player_team.get(p) == me.team), None)
+                if pid is not None:
+                    self._command_queue.enqueue(GameCommand(
+                        type="upgrade_extractor",
+                        player_id=pid,
+                        tick=self._iteration,
+                        data={"entity_id": eid, "path": path},
+                    ))
+        elif action == "set_research_type":
+            eid = result["entity_id"]
+            unit_type = result["unit_type"]
+            me = next((e for e in self.entities
+                       if isinstance(e, MetalExtractor) and e.entity_id == eid), None)
+            if me is not None:
+                pid = next((p for p in self.human_players
+                            if self.player_team.get(p) == me.team), None)
+                if pid is not None:
+                    self._command_queue.enqueue(GameCommand(
+                        type="set_research_type",
+                        player_id=pid,
+                        tick=self._iteration,
+                        data={"entity_id": eid, "unit_type": unit_type},
                     ))
 
     # -- step ---------------------------------------------------------------
@@ -874,6 +943,8 @@ class Game:
                     self.units.append(e)
                     self._quadfield.add_unit(e)
                     self.team_units.setdefault(e.team, []).append(e)
+                if hasattr(e, "selectable"):
+                    e.selectable = e.team in self._selectable_teams
         self._stats.record_subsystem("capture", (_perf() - _t) * 1000)
 
         _t = _perf()
@@ -888,7 +959,8 @@ class Game:
         # Spawn — spawn_step already appends to self.units; add to team lists
         entity_count_before_spawn = len(self.entities)
         _t = _perf()
-        spawn_step(self.entities, self.command_centers, self._selectable_players, stats=self._stats, tick=self._iteration, units=self.units)
+        spawn_step(self.entities, self.command_centers, self._selectable_players, stats=self._stats, tick=self._iteration, units=self.units,
+                   t2_upgrades=self._t2_upgrades if self.enable_t2 else None)
 
         if len(self.entities) > entity_count_before_spawn:
             self._physics_cooldown = 60  # 1 second to settle after spawn
@@ -915,6 +987,8 @@ class Game:
                     self.team_units[t] = [u for u in self.team_units[t] if u.alive]
             self.command_centers = [c for c in self.command_centers if c.alive]
             self.metal_extractors = [m for m in self.metal_extractors if m.alive]
+        if self.enable_t2:
+            self._refresh_t2_upgrades()
         self._stats.record_subsystem("cleanup", (_perf() - _t) * 1000)
 
         # Physics cooldown: detect movement to keep physics running
@@ -1188,9 +1262,8 @@ class Game:
             if entity.alive:
                 bonus = entity.get_spawn_bonus()
                 pct = round(bonus * 100)
-                label_color = TEAM_COLORS.get(entity.team, PLAYER_COLORS[0])
                 label = f"+{pct}%"
-                label_surf = self._label_font.render(label, True, label_color)
+                label_surf = self._label_font.render(label, True, (255, 255, 255))
                 lx = int(entity.x) - label_surf.get_width() // 2
                 ly = int(entity.y) - int(entity.radius + HEALTH_BAR_OFFSET + 12)
                 ws.blit(label_surf, (lx, ly))
@@ -1259,7 +1332,8 @@ class Game:
                          (self._screen_width, self._hud_rect.top))
         if self._has_human:
             gui.draw_hud(self.screen, self.entities,
-                         self._screen_width, self._screen_height, self._hud_h)
+                         self._screen_width, self._screen_height, self._hud_h,
+                         enable_t2=self.enable_t2, t2_upgrades=self._t2_upgrades)
 
         # Paused overlay (centered on game area)
         if self._paused:

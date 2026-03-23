@@ -11,7 +11,7 @@ from config.settings import (
 )
 from config.unit_types import UNIT_TYPES
 from core.helpers import angle_diff
-from systems.abilities import ReactiveArmor, Focus, ability_from_dict
+from systems.abilities import ReactiveArmor, ElectricArmor, Focus, ability_from_dict
 
 # fire-mode constants
 HOLD_FIRE = "hold_fire"
@@ -51,6 +51,7 @@ class Unit(CircleEntity, Damageable):
         self.unit_type = unit_type
         self.team = team
         self.player_id = player_id
+        self.is_t2: bool = stats.get("is_t2", False)
         self.speed: float = stats["speed"]
         self.color = PLAYER_COLORS[player_id - 1]
         self._base_color = self.color
@@ -132,7 +133,9 @@ class Unit(CircleEntity, Damageable):
         self.abilities: list = []
         if unit_type == "tank":
             self.abilities = [ReactiveArmor()]
-        elif unit_type == "sniper":
+        elif unit_type == "tank_t2":
+            self.abilities = [ElectricArmor()]
+        elif unit_type in ("sniper", "sniper_t2"):
             self.abilities = [Focus()]
 
     # -- damage -------------------------------------------------------------
@@ -395,6 +398,7 @@ class Unit(CircleEntity, Damageable):
             "abilities": [a.to_dict() for a in self.abilities],
             "_charge_pos": list(self._charge_pos) if self._charge_pos else None,
             "_charge_timer": self._charge_timer,
+            "is_t2": self.is_t2,
         })
         return d
 
@@ -426,6 +430,7 @@ class Unit(CircleEntity, Damageable):
         cp = data.get("_charge_pos")
         u._charge_pos = tuple(cp) if cp else None
         u._charge_timer = data.get("_charge_timer", 0.0)
+        u.is_t2 = data.get("is_t2", False)
         # cross-references resolved later by Game.load_state()
         u._follow_entity = None
         u.attack_target = None

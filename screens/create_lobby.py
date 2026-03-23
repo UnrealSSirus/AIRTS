@@ -172,6 +172,11 @@ class CreateLobbyScreen(BaseScreen):
             checked=saved.get("headless", False),
             enabled=False,
         )
+        self._t2_cb = Checkbox(
+            self._rx, ry + 242,
+            "Enable T2 Units",
+            checked=saved.get("enable_t2", False),
+        )
 
         # Bottom buttons
         cx = self.width // 2
@@ -340,6 +345,7 @@ class CreateLobbyScreen(BaseScreen):
                 self._sl_time_limit.handle_event(event)
                 self._debug_summary_cb.handle_event(event)
                 self._headless_cb.handle_event(event)
+                self._t2_cb.handle_event(event)
 
                 if self._start_btn.handle_event(event):
                     self._persist_settings()
@@ -363,6 +369,7 @@ class CreateLobbyScreen(BaseScreen):
             "time_limit": self._sl_time_limit.value,
             "save_debug_summary": self._debug_summary_cb.checked,
             "headless": self._headless_cb.checked,
+            "enable_t2": self._t2_cb.checked,
         })
 
     # ── result builder ────────────────────────────────────────────────────────
@@ -390,6 +397,7 @@ class CreateLobbyScreen(BaseScreen):
             "time_limit":    self._sl_time_limit.value,
             "save_debug_summary": self._debug_summary_cb.checked,
             "headless":      self._headless_cb.checked,
+            "enable_t2":     self._t2_cb.checked,
         })
 
     # ── rendering ─────────────────────────────────────────────────────────────
@@ -468,6 +476,7 @@ class CreateLobbyScreen(BaseScreen):
         self._sl_time_limit.draw(self.screen)
         self._debug_summary_cb.draw(self.screen)
         self._headless_cb.draw(self.screen)
+        self._t2_cb.draw(self.screen)
 
         # ── Start button ──────────────────────────────────────────────────────
         self._start_btn.draw(self.screen)
