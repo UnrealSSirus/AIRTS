@@ -4,6 +4,7 @@ from config.settings import (
     METAL_EXTRACTOR_SPAWN_BONUS,
     REINFORCE_BONUS_MULTIPLIER,
     METAL_SPOT_CAPTURE_RADIUS,
+    SELECTED_COLOR,
     TEAM_COLORS, PLAYER_COLORS,
 )
 from entities.unit import Unit
@@ -61,6 +62,9 @@ class MetalExtractor(Unit):
         for ability in self.abilities:
             if isinstance(ability, Reinforce) and ability.stacks > 0:
                 self._draw_plating_arcs(surface, ability.stacks)
+
+        if self.selected:
+            pygame.draw.circle(surface, SELECTED_COLOR, (self.x, self.y), self.radius + 2, 1)
 
         self.draw_health_bar(surface, self.x, self.y, self.radius + HEALTH_BAR_OFFSET)
 

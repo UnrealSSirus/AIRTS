@@ -549,20 +549,6 @@ class Game:
                 self._toggle_pause()
                 continue
 
-            # Click anywhere while paused → unpause
-            if (self._paused
-                    and event.type == pygame.MOUSEBUTTONDOWN
-                    and event.button == 1):
-                self._toggle_pause()
-                continue
-
-            if self._speed_slider.handle_event(event):
-                self._speed_multiplier = self._speed_slider.value / 100.0
-
-            if self._reset_cam_btn.handle_event(event):
-                self._camera.reset()
-                continue
-
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     if self._paused:
@@ -571,8 +557,9 @@ class Game:
                         self.running = False
                     else:
                         self._toggle_pause()
+                    continue
 
-            # Scroll wheel zoom (available always, not just for human)
+            # Scroll wheel zoom (available always, even while paused)
             if event.type == pygame.MOUSEWHEEL:
                 mx, my = pygame.mouse.get_pos()
                 if self._game_area.collidepoint(mx, my):
@@ -583,7 +570,7 @@ class Game:
                     elif event.y < 0:
                         self._camera.zoom_at(vx, vy, 1.0 / CAMERA_ZOOM_STEP)
 
-            # Middle mouse pan
+            # Middle mouse pan (available always, even while paused)
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 2:
                 if self._game_area.collidepoint(event.pos):
                     self._mid_dragging = True
@@ -595,6 +582,17 @@ class Game:
                 dy = event.pos[1] - self._mid_last[1]
                 self._camera.pan(dx, dy)
                 self._mid_last = event.pos
+
+            # Skip all other input while paused (use pause button or ESC)
+            if self._paused:
+                continue
+
+            if self._speed_slider.handle_event(event):
+                self._speed_multiplier = self._speed_slider.value / 100.0
+
+            if self._reset_cam_btn.handle_event(event):
+                self._camera.reset()
+                continue
 
             if not self._has_human:
                 continue
@@ -874,6 +872,8 @@ class Game:
                     self.units.append(e)
                     self._quadfield.add_unit(e)
                     self.team_units.setdefault(e.team, []).append(e)
+                if hasattr(e, "selectable"):
+                    e.selectable = e.team in self._selectable_teams
         self._stats.record_subsystem("capture", (_perf() - _t) * 1000)
 
         _t = _perf()
