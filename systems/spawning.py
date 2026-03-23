@@ -12,6 +12,7 @@ def spawn_step(
     stats=None,
     tick: int = 0,
     units: list | None = None,
+    t2_upgrades: dict[int, set[str]] | None = None,
 ):
     """Spawn units from any command center whose timer is ready.
 
@@ -21,10 +22,15 @@ def spawn_step(
     for cc in command_centers:
         if not cc.alive or not cc.spawn_ready():
             continue
-        type_def = UNIT_TYPES.get(cc.spawn_type, {})
+        # Determine actual type (T2 variant if upgraded)
+        actual_type = cc.spawn_type
+        if (t2_upgrades is not None
+                and cc.spawn_type in t2_upgrades.get(cc.team, set())):
+            actual_type = cc.spawn_type + "_t2"
+        type_def = UNIT_TYPES.get(actual_type, UNIT_TYPES.get(cc.spawn_type, {}))
         count = type_def.get("spawn_count", 1)
         for _ in range(count):
-            u = cc.spawn_unit()
+            u = cc.spawn_unit(unit_type=actual_type)
             u.selectable = u.player_id in human_players
             entities.append(u)
             if units is not None:

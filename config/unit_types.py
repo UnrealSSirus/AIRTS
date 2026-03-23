@@ -100,7 +100,7 @@ UNIT_TYPES = {
         "symbol": SHOCKWAVE_SYMBOL, "can_attack": True,
         "fov": 360, "turn_rate": 180, "los": 100,
         "weapon": {
-            "name": "ChainLaser", "damage": 5, "range": 60, "cooldown": 3.0,
+            "name": "ChainLaser", "damage": 7, "range": 60, "cooldown": 3.0,
             "chain_range": 70.0, "chain_delay": 0.2,
         },
     },
@@ -109,9 +109,9 @@ UNIT_TYPES = {
         "symbol": ARTILLERY_SYMBOL, "can_attack": True,
         "fov": 15, "turn_rate": 45, "los": 250,
         "weapon": {
-            "name": "ArtilleryCannon", "damage": 100, "range": 200, "cooldown": 5.0,
-            "splash_radius": 40, "splash_damage_max": 50, "splash_damage_min": 0,
-            "charge_time": 2.0,
+            "name": "ArtilleryCannon", "damage": 100, "range": 160, "cooldown": 6.0,
+            "splash_radius": 40, "splash_damage_max": 50, "splash_damage_min": 1,
+            "charge_time": 2,
             "sound": "artillery",
             "laser_width": 6,
             "laser_flash_duration": 2.5,
@@ -129,9 +129,109 @@ UNIT_TYPES = {
         "fov": 360, "turn_rate": 0, "los": 50,
         "is_building": True,
     },
+
+    # -- T2 unit types --------------------------------------------------------
+    # Full definitions — edit these directly to differentiate T2 from T1.
+    "soldier_t2": {
+        "hp": 125, "speed": 42, "radius": 5,
+        "symbol": None, "can_attack": True,
+        "fov": 90, "turn_rate": 180, "los": 100,
+        "weapon": {"name": "Laser", "damage": 15, "range": 55, "cooldown": 1.4},
+        "is_t2": True,
+    },
+    "medic_t2": {
+        "hp": 75, "speed": 60, "radius": 5,
+        "symbol": MEDIC_SYMBOL, "can_attack": True,
+        "fov": 30, "turn_rate": 180, "los": 80,
+        "weapon": {
+            "name": "HealLaser", "damage": -1, "range": 70, "cooldown": 0.2,
+            "hits_only_friendly": True,
+        },
+        "is_t2": True,
+    },
+    "tank_t2": {
+        "hp": 400, "speed": 20, "radius": 7,
+        "symbol": TANK_SYMBOL, "can_attack": True,
+        "fov": 150, "turn_rate": 180, "los": 100,
+        "weapon": {"name": "Laser", "damage": 7, "range": 50, "cooldown": 2.0},
+        "is_t2": True,
+    },
+    "sniper_t2": {
+        "hp": 65, "speed": 35, "radius": 5,
+        "symbol": SNIPER_SYMBOL, "can_attack": True,
+        "fov": 45, "turn_rate": 180, "los": 200,
+        "weapon": {"name": "Heavy Laser", "damage": 45, "range": 150, "cooldown": 5.0,
+                   "laser_width": 3, "sound": "laser"},
+        "is_t2": True,
+    },
+    "machine_gunner_t2": {
+        "hp": 80, "speed": 30, "radius": 5,
+        "symbol": MACHINE_GUNNER_SYMBOL, "can_attack": True,
+        "fov": 180, "turn_rate": 180, "los": 100,
+        "weapon": {"name": "Laser", "damage": 3, "range": 75, "cooldown": 0.1},
+        "is_t2": True,
+    },
+    "scout_t2": {
+        "hp": 12, "speed": 110, "radius": 4,
+        "symbol": SCOUT_SYMBOL, "can_attack": True,
+        "fov": 180, "turn_rate": 180, "los": 150,
+        "spawn_count": 6,
+        "weapon": {"name": "Laser", "damage": 5, "range": 30, "cooldown": 0.3},
+        "is_t2": True,
+    },
+    "shockwave_t2": {
+        "hp": 50, "speed": 30, "radius": 5,
+        "symbol": SHOCKWAVE_SYMBOL, "can_attack": True,
+        "fov": 360, "turn_rate": 180, "los": 100,
+        "weapon": {
+            "name": "ChainLaser", "damage": 15, "range": 90, "cooldown": 3.0,
+            "chain_range": 50.0, "chain_delay": 0.1,
+        },
+        "is_t2": True,
+    },
+    "artillery_t2": {
+        "hp": 120, "speed": 15, "radius": 10,
+        "symbol": ARTILLERY_SYMBOL, "can_attack": True,
+        "fov": 15, "turn_rate": 45, "los": 250,
+        "weapon": {
+            "name": "ArtilleryCannon", "damage": 100, "range": 180, "cooldown": 6.0,
+            "splash_radius": 75, "splash_damage_max": 70, "splash_damage_min": 10,
+            "charge_time": 3.0,
+            "sound": "artillery",
+            "laser_width": 6,
+            "laser_flash_duration": 2.5,
+        },
+        "is_t2": True,
+    },
 }
 
 
 def get_spawnable_types() -> dict:
-    """Return only unit types that can be spawned (excludes buildings)."""
-    return {k: v for k, v in UNIT_TYPES.items() if not v.get("is_building", False)}
+    """Return only unit types that can be spawned by the player (excludes buildings and T2)."""
+    return {k: v for k, v in UNIT_TYPES.items()
+            if not v.get("is_building", False) and not v.get("is_t2", False)}
+
+
+# -- T2 helpers ---------------------------------------------------------------
+
+T2_NAMES: dict[str, str] = {
+    "soldier": "Marine",
+    "medic": "Priest",
+    "tank": "Heavy Tank",
+    "sniper": "Marksman",
+    "machine_gunner": "Plasma Beamer",
+    "scout": "Drone Swarm",
+    "shockwave": "Disruptor",
+    "artillery": "Mortar",
+}
+
+
+def get_t2_name(unit_type: str) -> str:
+    """Return the T2 display name for a base unit type."""
+    base = unit_type.removesuffix("_t2")
+    return T2_NAMES.get(base, base.replace("_", " ").title() + " T2")
+
+
+def get_t2_type(unit_type: str) -> str:
+    """Return the T2 type key for a base unit type (e.g. 'soldier' -> 'soldier_t2')."""
+    return unit_type + "_t2"

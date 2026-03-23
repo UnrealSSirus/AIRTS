@@ -57,12 +57,13 @@ class CommandCenter(Unit):
     def reset_spawn(self):
         self._spawn_timer = 0.0
 
-    def spawn_unit(self) -> Unit:
+    def spawn_unit(self, unit_type: str | None = None) -> Unit:
+        actual_type = unit_type or self.spawn_type
         angle = random.uniform(0, math.tau)
         dist = CC_RADIUS + 15
         ux = self.x + math.cos(angle) * dist
         uy = self.y + math.sin(angle) * dist
-        u = Unit(ux, uy, team=self.team, unit_type=self.spawn_type,
+        u = Unit(ux, uy, team=self.team, unit_type=actual_type,
                  player_id=self.player_id)
         u._bounds = self._bounds
         if self.rally_point is not None:
