@@ -2,7 +2,11 @@
 from __future__ import annotations
 
 import math
+import os
+import random
 import pygame
+import pygame.sndarray
+import numpy as np
 from screens.base import BaseScreen, ScreenResult
 from networking.client import GameClient
 from systems.commands import GameCommand
@@ -22,7 +26,9 @@ from config.settings import (
 )
 from core.camera import Camera
 from config.unit_types import UNIT_TYPES, get_spawnable_types
-from ui.widgets import _get_font
+from ui.widgets import _get_font, Slider, Button
+import gui
+from gui_adapter import wrap_entities
 
 _STATUS_COLOR = (180, 180, 200)
 _DISCONNECT_COLOR = (255, 100, 100)
@@ -59,9 +65,11 @@ class ClientGameScreen(BaseScreen):
         screen: pygame.Surface,
         clock: pygame.time.Clock,
         client: GameClient,
+        is_local: bool = False,
     ):
         super().__init__(screen, clock)
         self._client = client
+        self._is_local = is_local
         self._my_team: int = client.client_team
         mw = client.map_width
         mh = client.map_height
@@ -115,8 +123,66 @@ class ClientGameScreen(BaseScreen):
         # Disconnect tracking
         self._disconnect_timer: float = 0.0
 
-        # HUD build button rects (cached)
+        # Enable T2 and upgrade tracking (from game_start message)
+        self._enable_t2: bool = client.enable_t2
+        self._t2_upgrades: dict[int, set[str]] = {}
+
+        # HUD build button rects (cached) — still used for basic click detection
         self._build_btns = self._compute_build_btn_rects()
+
+        # Animation state
+        self._phase: str = "warp_in"  # warp_in → playing → explode
+        self._anim_timer: float = 0.0
+        self._anim_surface = pygame.Surface((mw, mh), pygame.SRCALPHA)
+        self._fragments: list[dict] = []
+        self._splashes: list[dict] = []
+
+        # Player names from game_start
+        self._player_names: dict[int, str] = client.player_names or {}
+
+        # Double-click detection
+        self._last_click_time: int = 0
+        self._last_click_pos: tuple[int, int] = (0, 0)
+        _DBLCLICK_MS = 400
+
+        # Local game controls (pause/speed/reset cam)
+        self._paused = False
+        if is_local:
+            self._speed_slider = Slider(self.width - 170, 10, 150, "Speed %", 25, 800, 100, 25)
+            self._pause_btn = Button(self.width - 210, 12, 32, 24, "||", icon="pause")
+            self._reset_cam_btn = Button(70, 12, 50, 24, "Reset", font_size=18)
+            self._pause_font = pygame.font.SysFont(None, 48)
+        else:
+            self._speed_slider = None
+            self._pause_btn = None
+            self._reset_cam_btn = None
+            self._pause_font = None
+
+        # Previous laser set for detecting new lasers (for sound)
+        self._prev_laser_keys: set[tuple] = set()
+
+        # Sound effects
+        _sounds_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "sounds")
+        self._sounds: dict[str, pygame.mixer.Sound] = {}
+        try:
+            self._sounds["fast_laser"] = pygame.mixer.Sound(os.path.join(_sounds_dir, "fast_laser.mp3"))
+            self._sounds["laser"] = pygame.mixer.Sound(os.path.join(_sounds_dir, "laser.mp3"))
+            # Generate artillery sound (pitch-shifted laser)
+            _base = pygame.mixer.Sound(os.path.join(_sounds_dir, "laser.mp3"))
+            _arr = pygame.sndarray.array(_base)
+            _factor = 1.7
+            _n = int(len(_arr) * _factor)
+            _idx = np.linspace(0, len(_arr) - 1, _n).astype(np.int32)
+            _heavy = _arr[_idx]
+            _heavy_f = _heavy.astype(np.float32) * 1.4
+            if np.issubdtype(_arr.dtype, np.integer):
+                _info = np.iinfo(_arr.dtype)
+                _heavy = np.clip(_heavy_f, _info.min, _info.max).astype(_arr.dtype)
+            else:
+                _heavy = np.clip(_heavy_f, -1.0, 1.0).astype(_arr.dtype)
+            self._sounds["artillery"] = pygame.sndarray.make_sound(_heavy)
+        except Exception:
+            pass
 
     def _compute_build_btn_rects(self) -> list[tuple[pygame.Rect, str]]:
         """Compute spawn-type button rects inside the action panel area of the HUD."""
@@ -139,6 +205,7 @@ class ClientGameScreen(BaseScreen):
     def run(self) -> ScreenResult:
         while True:
             dt = self.clock.tick(60) / 1000.0
+            self._anim_timer += dt
 
             # Poll for new state from host
             frame = self._client.poll_state()
@@ -147,21 +214,36 @@ class ClientGameScreen(BaseScreen):
                 if msg_type == "state":
                     self._entities = frame.get("entities", [])
                     self._lasers = frame.get("lasers", [])
+                    self._splashes = frame.get("splashes", [])
                     self._tick = frame.get("tick", 0)
                     self._winner = frame.get("winner", 0)
                     self._disconnect_timer = 0.0
+                    # Detect new lasers and play sounds
+                    self._play_laser_sounds()
                 elif msg_type == "game_over":
                     self._winner = frame.get("winner", 0)
             else:
                 self._disconnect_timer += dt
 
+            # Phase transitions
+            if self._phase == "warp_in" and self._anim_timer >= 3.0:
+                self._phase = "playing"
+
+            if self._winner != 0 and self._phase == "playing":
+                self._phase = "explode"
+                self._anim_timer = 0.0
+                # Build fragments from losing CCs
+                losing_team = 3 - self._winner if self._winner > 0 else 0
+                self._init_fragments(losing_team)
+
+            # Update explosion fragments
+            if self._phase == "explode":
+                self._update_fragments(dt)
+
             # Check for disconnect or game over
-            if self._client.error:
+            if self._client.error and not self._is_local:
                 return self._build_result()
-            if self._winner != 0:
-                # Show result briefly then return
-                self._draw()
-                pygame.time.wait(2000)
+            if self._phase == "explode" and self._anim_timer >= 3.0:
                 return self._build_result()
 
             # Handle input
@@ -173,6 +255,44 @@ class ClientGameScreen(BaseScreen):
                 if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                     self._client.stop()
                     return ScreenResult("main_menu")
+
+                # Pause toggle (spacebar for local games)
+                if (event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE
+                        and self._is_local):
+                    self._paused = not self._paused
+                    self._client.send_command(GameCommand(
+                        type="set_pause",
+                        player_id=self._my_team,
+                        tick=self._tick,
+                        data={"paused": self._paused},
+                    ))
+
+                # Header bar interactions (local controls)
+                if (event.type == pygame.MOUSEBUTTONDOWN and event.button == 1
+                        and self._is_local and self._header_rect.collidepoint(event.pos)):
+                    mx_h, my_h = event.pos
+                    if self._pause_btn and self._pause_btn.rect.collidepoint(mx_h, my_h):
+                        self._paused = not self._paused
+                        self._client.send_command(GameCommand(
+                            type="set_pause",
+                            player_id=self._my_team,
+                            tick=self._tick,
+                            data={"paused": self._paused},
+                        ))
+                    elif self._reset_cam_btn and self._reset_cam_btn.rect.collidepoint(mx_h, my_h):
+                        self._camera.reset()
+
+                # Speed slider (local games)
+                if self._is_local and self._speed_slider:
+                    changed = self._speed_slider.handle_event(event)
+                    if changed:
+                        speed_pct = self._speed_slider.value
+                        self._client.send_command(GameCommand(
+                            type="set_speed",
+                            player_id=self._my_team,
+                            tick=self._tick,
+                            data={"speed": speed_pct / 100.0},
+                        ))
 
                 # Zoom
                 if event.type == pygame.MOUSEWHEEL:
@@ -265,12 +385,23 @@ class ClientGameScreen(BaseScreen):
         additive = pygame.key.get_mods() & pygame.KMOD_SHIFT
 
         if drag_r < 5:
+            # Double-click detection
+            now = pygame.time.get_ticks()
+            is_dblclick = (
+                now - self._last_click_time < 400
+                and math.hypot(pos[0] - self._last_click_pos[0],
+                               pos[1] - self._last_click_pos[1]) < 10
+            )
+            self._last_click_time = now
+            self._last_click_pos = pos
+
             # Click select
             wx, wy = self._screen_to_world(pos)
             if not additive:
                 self._selected_ids.clear()
             best_id = None
             best_dist = float("inf")
+            best_ut = None
             for ent in self._entities:
                 if ent.get("tm") != self._my_team:
                     continue
@@ -283,8 +414,18 @@ class ClientGameScreen(BaseScreen):
                 if d <= r + 5 and d < best_dist:
                     best_dist = d
                     best_id = ent.get("id")
+                    best_ut = ent.get("ut")
             if best_id is not None:
                 self._selected_ids.add(best_id)
+                # Double-click: select all visible units of same type
+                if is_dblclick and best_ut:
+                    for ent in self._entities:
+                        if (ent.get("tm") == self._my_team
+                                and ent.get("ut") == best_ut
+                                and ent.get("t") == "U"):
+                            eid = ent.get("id")
+                            if eid is not None:
+                                self._selected_ids.add(eid)
         else:
             # Circle select
             if not additive:
@@ -308,26 +449,51 @@ class ClientGameScreen(BaseScreen):
 
     # -- HUD interaction ----------------------------------------------------
 
-    def _get_selected_cc(self) -> dict | None:
-        for ent in self._entities:
-            if ent.get("t") == "CC" and ent.get("id") in self._selected_ids:
-                return ent
-        return None
-
     def _handle_hud_click(self, pos: tuple[int, int]) -> None:
-        cc = self._get_selected_cc()
-        if cc is None or cc.get("tm") != self._my_team:
-            return
+        proxies = wrap_entities(self._entities, self._selected_ids)
         mx, my = pos
-        for br, ut in self._build_btns:
-            if br.collidepoint(mx, my):
+        result = gui.handle_hud_click(
+            proxies, mx, my,
+            self.width, self.height, self._hud_h,
+            enable_t2=self._enable_t2,
+            t2_upgrades=self._t2_upgrades,
+        )
+        if result is None:
+            return
+        action = result["action"]
+        if action == "set_spawn_type":
+            self._client.send_command(GameCommand(
+                type="set_spawn_type",
+                player_id=self._my_team,
+                tick=self._tick,
+                data={"unit_type": result["unit_type"]},
+            ))
+        elif action == "stop":
+            selected = [
+                ent for ent in self._entities
+                if ent.get("id") in self._selected_ids and ent.get("t") == "U"
+            ]
+            if selected:
                 self._client.send_command(GameCommand(
-                    type="set_spawn_type",
-                    team=self._my_team,
+                    type="stop",
+                    player_id=self._my_team,
                     tick=self._tick,
-                    data={"team": self._my_team, "unit_type": ut},
+                    data={"unit_ids": [e["id"] for e in selected]},
                 ))
-                return
+        elif action == "upgrade_extractor":
+            self._client.send_command(GameCommand(
+                type="upgrade_extractor",
+                player_id=self._my_team,
+                tick=self._tick,
+                data={"entity_id": result["entity_id"], "path": result["path"]},
+            ))
+        elif action == "set_research_type":
+            self._client.send_command(GameCommand(
+                type="set_research_type",
+                player_id=self._my_team,
+                tick=self._tick,
+                data={"entity_id": result["entity_id"], "unit_type": result["unit_type"]},
+            ))
 
     # -- commands -----------------------------------------------------------
 
@@ -434,6 +600,8 @@ class ClientGameScreen(BaseScreen):
 
     def _build_result(self) -> ScreenResult:
         self._client.stop()
+        # Use opponent name from lobby_status if available, else fall back to host_name
+        opponent_name = self._client.opponent_name or self._client.host_name
         return ScreenResult("results", data={
             "winner": self._winner,
             "human_teams": {self._my_team},
@@ -441,9 +609,126 @@ class ClientGameScreen(BaseScreen):
             "replay_filepath": "",
             "team_names": {
                 self._my_team: self._client._player_name,
-                3 - self._my_team: self._client.host_name,
+                3 - self._my_team: opponent_name,
             },
         })
+
+    # -- sound effects ------------------------------------------------------
+
+    def _play_laser_sounds(self) -> None:
+        """Detect new lasers by comparing to previous frame and play sounds."""
+        if not self._sounds:
+            return
+        cur_keys: set[tuple] = set()
+        for lf in self._lasers:
+            if len(lf) >= 6:
+                # Use source position + target position as key
+                cur_keys.add((round(lf[0], 0), round(lf[1], 0),
+                              round(lf[2], 0), round(lf[3], 0)))
+        new_keys = cur_keys - self._prev_laser_keys
+        self._prev_laser_keys = cur_keys
+
+        for lf in self._lasers:
+            if len(lf) < 6:
+                continue
+            key = (round(lf[0], 0), round(lf[1], 0),
+                   round(lf[2], 0), round(lf[3], 0))
+            if key not in new_keys:
+                continue
+            width = lf[5]
+            if width >= 4:
+                snd = self._sounds.get("artillery")
+            elif width >= 2:
+                snd = self._sounds.get("laser")
+            else:
+                snd = self._sounds.get("fast_laser")
+            if snd:
+                snd.play()
+
+    # -- animations ---------------------------------------------------------
+
+    def _init_fragments(self, losing_team: int) -> None:
+        """Create 6 triangular fragments from each losing CC's hexagon."""
+        for ent in self._entities:
+            if ent.get("t") != "CC":
+                continue
+            if ent.get("tm") != losing_team:
+                continue
+            cx, cy = ent.get("x", 0), ent.get("y", 0)
+            color = tuple(ent.get("c", [255, 255, 255]))
+            pts = ent.get("pts", [])
+            for i in range(len(pts)):
+                p1 = pts[i]
+                p2 = pts[(i + 1) % len(pts)]
+                tri = [(0.0, 0.0), (p1[0], p1[1]), (p2[0], p2[1])]
+                out_x = (p1[0] + p2[0]) / 2
+                out_y = (p1[1] + p2[1]) / 2
+                dist = math.hypot(out_x, out_y) or 1.0
+                out_x /= dist
+                out_y /= dist
+                speed = random.uniform(40, 120)
+                self._fragments.append({
+                    "points": tri,
+                    "cx": cx, "cy": cy,
+                    "vx": out_x * speed + random.uniform(-20, 20),
+                    "vy": out_y * speed + random.uniform(-20, 20),
+                    "angle": 0.0,
+                    "rot_speed": random.uniform(-4, 4),
+                    "color": color,
+                })
+
+    def _update_fragments(self, dt: float) -> None:
+        for frag in self._fragments:
+            frag["cx"] += frag["vx"] * dt
+            frag["cy"] += frag["vy"] * dt
+            frag["angle"] += frag["rot_speed"] * dt
+
+    def _render_warp_in(self, ws: pygame.Surface) -> None:
+        """Draw CCs scaled in with glow rings during warp_in phase."""
+        t = min(self._anim_timer / 3.0, 1.0)
+        scale = t * (2.0 - t)  # ease-out
+
+        for ent in self._entities:
+            if ent.get("t") != "CC":
+                continue
+            cx, cy = ent.get("x", 0), ent.get("y", 0)
+            color = tuple(ent.get("c", [255, 255, 255]))
+            pts = ent.get("pts", [])
+            tm = ent.get("tm", 1)
+            if pts:
+                scaled = [(cx + px * scale, cy + py * scale) for px, py in pts]
+                pygame.draw.polygon(ws, color, scaled)
+                outline = (150, 220, 255) if tm == 1 else (255, 140, 140)
+                pygame.draw.polygon(ws, outline, scaled, 2)
+
+            # Glow ring
+            glow_radius = int(CC_RADIUS * 3 * t)
+            glow_alpha = int(120 * (1.0 - t))
+            if glow_radius > 0 and glow_alpha > 0:
+                self._anim_surface.fill((0, 0, 0, 0))
+                glow_color = (*color[:3], glow_alpha)
+                pygame.draw.circle(self._anim_surface, glow_color,
+                                   (int(cx), int(cy)), glow_radius, 3)
+                ws.blit(self._anim_surface, (0, 0))
+
+    def _render_explode(self, ws: pygame.Surface) -> None:
+        """Draw explosion fragments flying out."""
+        t = min(self._anim_timer / 3.0, 1.0)
+        alpha = int(255 * (1.0 - t))
+        if alpha <= 0:
+            return
+        self._anim_surface.fill((0, 0, 0, 0))
+        for frag in self._fragments:
+            cos_a = math.cos(frag["angle"])
+            sin_a = math.sin(frag["angle"])
+            rotated = []
+            for px, py in frag["points"]:
+                rx = px * cos_a - py * sin_a + frag["cx"]
+                ry = px * sin_a + py * cos_a + frag["cy"]
+                rotated.append((rx, ry))
+            frag_color = (*frag["color"][:3], alpha)
+            pygame.draw.polygon(self._anim_surface, frag_color, rotated)
+        ws.blit(self._anim_surface, (0, 0))
 
     # -- rendering ----------------------------------------------------------
 
@@ -468,6 +753,7 @@ class ClientGameScreen(BaseScreen):
         entities = sorted(self._entities,
                           key=lambda e: order.get(e.get("t", ""), 4))
 
+        is_warp_in = self._phase == "warp_in"
         for ent in entities:
             t = ent.get("t")
             if t == "MS":
@@ -475,9 +761,14 @@ class ClientGameScreen(BaseScreen):
             elif t == "ME":
                 self._draw_metal_extractor(ent)
             elif t == "CC":
-                self._draw_command_center(ent)
+                if not is_warp_in:
+                    self._draw_command_center(ent)
             elif t == "U":
                 self._draw_unit(ent)
+
+        # Warp-in animation overlays CCs with scale + glow
+        if is_warp_in:
+            self._render_warp_in(ws)
 
         # Selection rings
         for ent in entities:
@@ -492,6 +783,54 @@ class ClientGameScreen(BaseScreen):
         # Lasers
         for lf in self._lasers:
             self._draw_laser(lf)
+
+        # Charge beams (artillery charge preview)
+        for ent in entities:
+            chx = ent.get("chx")
+            if chx is not None:
+                chy = ent.get("chy", 0)
+                chp = ent.get("chp", 0)
+                ex, ey = ent.get("x", 0), ent.get("y", 0)
+                orange = (255, 140, 0, int(100 + 100 * chp))
+                temp = pygame.Surface(ws.get_size(), pygame.SRCALPHA)
+                pygame.draw.line(temp, orange, (int(ex), int(ey)),
+                                 (int(chx), int(chy)), 2)
+                # Splash ring at target
+                splash_r = int(30 * chp)
+                if splash_r > 0:
+                    pygame.draw.circle(temp, (255, 100, 0, int(60 * chp)),
+                                       (int(chx), int(chy)), splash_r, 1)
+                ws.blit(temp, (0, 0))
+
+        # Splash effects (expanding red circles)
+        for s in self._splashes:
+            sx, sy = s.get("x", 0), s.get("y", 0)
+            sr = s.get("r", 30)
+            sp = s.get("p", 0)
+            cur_r = int(sr * sp)
+            alpha = int(180 * (1.0 - sp))
+            if cur_r > 0 and alpha > 0:
+                temp = pygame.Surface(ws.get_size(), pygame.SRCALPHA)
+                pygame.draw.circle(temp, (255, 60, 30, alpha),
+                                   (int(sx), int(sy)), cur_r, 2)
+                ws.blit(temp, (0, 0))
+
+        # CC bonus labels
+        for ent in entities:
+            if ent.get("t") == "CC":
+                bp = ent.get("bp", 0)
+                if bp > 0:
+                    label = _get_font(16).render(f"+{bp}%", True, (200, 200, 60))
+                    lx = int(ent.get("x", 0)) - label.get_width() // 2
+                    ly = int(ent.get("y", 0)) + CC_RADIUS + 8
+                    ws.blit(label, (lx, ly))
+            elif ent.get("t") == "ME":
+                meb = ent.get("meb", 0)
+                if meb > 0:
+                    label = _get_font(14).render(f"+{meb}%", True, (200, 200, 60))
+                    lx = int(ent.get("x", 0)) - label.get_width() // 2
+                    ly = int(ent.get("y", 0)) + int(ent.get("r", 10)) + 6
+                    ws.blit(label, (lx, ly))
 
         # Team labels
         self._draw_team_labels(entities)
@@ -514,15 +853,21 @@ class ClientGameScreen(BaseScreen):
                                    (int(wcx), int(wcy)), int(wr), 1)
                 ws.blit(self._selection_surface, (0, 0))
 
-        # Right-click path
+        # Right-click path with dots
         if self._rdragging and len(self._rpath) > 1:
             for i in range(1, len(self._rpath)):
                 ax, ay = self._rpath[i - 1]
                 bx, by = self._rpath[i]
                 pygame.draw.line(ws, (0, 200, 60), (ax, ay), (bx, by), 1)
+            for px, py in self._rpath:
+                pygame.draw.circle(ws, (0, 240, 80), (int(px), int(py)), 3)
 
         # Fog of war
         self._draw_fog(entities)
+
+        # Explosion fragments overlay
+        if self._phase == "explode":
+            self._render_explode(ws)
 
         # -- Composite to screen --
         self.screen.fill((0, 0, 0))
@@ -546,8 +891,8 @@ class ClientGameScreen(BaseScreen):
         timer = font.render(f"{m}:{s:02d}", True, _STATUS_COLOR)
         self.screen.blit(timer, (self.width // 2 - timer.get_width() // 2, 10))
 
-        # Disconnect warning
-        if self._disconnect_timer > 3.0:
+        # Disconnect warning (suppress for local games)
+        if self._disconnect_timer > 3.0 and not self._is_local:
             warn = font.render("Connection lost...", True, _DISCONNECT_COLOR)
             self.screen.blit(warn, (self.width - warn.get_width() - 10, 10))
 
@@ -556,6 +901,15 @@ class ClientGameScreen(BaseScreen):
         fps_val = self.clock.get_fps()
         fps_surf = fps_font.render(f"FPS: {fps_val:.0f}", True, (200, 200, 200))
         self.screen.blit(fps_surf, (team_label.get_width() + 20, 12))
+
+        # Local game controls in header
+        if self._is_local:
+            if self._speed_slider:
+                self._speed_slider.draw(self.screen)
+            if self._pause_btn:
+                self._pause_btn.draw(self.screen)
+            if self._reset_cam_btn:
+                self._reset_cam_btn.draw(self.screen)
 
         # Game area: black background then camera projection
         ga = self._game_area
@@ -594,192 +948,26 @@ class ClientGameScreen(BaseScreen):
             self.screen.blit(surf, (self.width // 2 - surf.get_width() // 2,
                                     self.height // 2 - surf.get_height() // 2))
 
+        # PAUSED overlay (local games)
+        if self._paused and self._is_local and self._pause_font:
+            pause_surf = self._pause_font.render("PAUSED", True, (255, 255, 255))
+            px = self.width // 2 - pause_surf.get_width() // 2
+            py = self.height // 2 - pause_surf.get_height() // 2
+            self.screen.blit(pause_surf, (px, py))
+
         pygame.display.flip()
 
-    # -- HUD drawing --------------------------------------------------------
+    # -- HUD drawing (delegated to gui.py via adapter) -----------------------
 
     def _draw_hud(self) -> None:
-        """Draw the HUD panel at the bottom of the screen."""
-        cc = self._get_selected_cc()
-        selected_units = [
-            ent for ent in self._entities
-            if ent.get("id") in self._selected_ids and ent.get("t") == "U"
-        ]
-
-        # Action panel (rightmost section)
-        action_w = max(220, int(self.width * 0.20))
-        ar = pygame.Rect(self.width - action_w, self.height - self._hud_h,
-                         action_w, self._hud_h)
-        pygame.draw.rect(self.screen, _SECTION_BG, ar)
-        pygame.draw.line(self.screen, _DIVIDER,
-                         (ar.left, ar.top), (ar.left, ar.bottom))
-
-        tf = _get_font(18)
-        mx, my = pygame.mouse.get_pos()
-
-        if cc is not None and cc.get("tm") == self._my_team:
-            # Build options for CC
-            ts = tf.render("Build", True, _TITLE_COLOR)
-            self.screen.blit(ts, (ar.left + 8, ar.top + 6))
-
-            current_spawn = cc.get("st", "soldier")
-            for br, ut in self._build_btns:
-                is_sel = current_spawn == ut
-                is_hov = br.collidepoint(mx, my)
-                bg = (GUI_BTN_SELECTED if is_sel
-                      else GUI_BTN_HOVER if is_hov
-                      else GUI_BTN_NORMAL)
-
-                pygame.draw.rect(self.screen, bg, br, border_radius=4)
-                pygame.draw.rect(self.screen, GUI_BORDER, br, 1, border_radius=4)
-
-                st = UNIT_TYPES.get(ut, {})
-                sym = st.get("symbol")
-                cx, cy = br.centerx, br.centery
-                my_color = TEAM1_COLOR if self._my_team == 1 else TEAM2_COLOR
-                highlight = (150, 220, 255) if self._my_team == 1 else (255, 140, 140)
-                if sym is not None:
-                    sc = 0.9
-                    pts = [(cx + px * sc, cy + py * sc) for px, py in sym]
-                    pygame.draw.polygon(self.screen, my_color, pts)
-                    pygame.draw.polygon(self.screen, highlight, pts, 1)
-                else:
-                    pygame.draw.circle(self.screen, my_color, (cx, cy), 7)
-                    pygame.draw.circle(self.screen, highlight, (cx, cy), 7, 1)
-
-            # Tooltip for hovered button
-            for br, ut in self._build_btns:
-                if br.collidepoint(mx, my):
-                    self._draw_tooltip(ut, ar)
-                    break
-        elif selected_units:
-            ts = tf.render("Actions", True, _TITLE_COLOR)
-            self.screen.blit(ts, (ar.left + 8, ar.top + 6))
-
-        # Display panel (left of action panel) — show selected unit info
-        display_rect = pygame.Rect(0, self.height - self._hud_h,
-                                   self.width - action_w, self._hud_h)
-        pygame.draw.rect(self.screen, _SECTION_BG, display_rect)
-
-        if selected_units:
-            self._draw_unit_info(display_rect, selected_units)
-        elif cc is not None and cc.get("tm") == self._my_team:
-            self._draw_cc_info(display_rect, cc)
-
-    def _draw_unit_info(self, r: pygame.Rect, units: list[dict]) -> None:
-        """Show selected unit info in the display panel."""
-        pad = 8
-        tf = _get_font(18)
-        sf = _get_font(16)
-
-        if len(units) == 1:
-            ent = units[0]
-            ut = ent.get("ut", "soldier")
-            hp = ent.get("hp", 100)
-            stats = UNIT_TYPES.get(ut, {})
-            max_hp = stats.get("hp", 100)
-            name = ut.replace("_", " ").title()
-
-            y = r.top + pad
-            ns = tf.render(name, True, _TITLE_COLOR)
-            self.screen.blit(ns, (r.left + pad, y))
-            y += ns.get_height() + 4
-
-            # HP bar
-            bw = min(r.width - pad * 2, 150)
-            bh = 6
-            ratio = hp / max_hp if max_hp > 0 else 0
-            pygame.draw.rect(self.screen, HEALTH_BAR_BG, (r.left + pad, y, bw, bh))
-            fg = HEALTH_BAR_FG if ratio > 0.35 else HEALTH_BAR_LOW
-            pygame.draw.rect(self.screen, fg, (r.left + pad, y, int(bw * ratio), bh))
-            ht = sf.render(f"{int(hp)}/{int(max_hp)}", True, (200, 200, 220))
-            self.screen.blit(ht, (r.left + pad + bw + 6, y - 2))
-        else:
-            # Group count
-            count_text = tf.render(f"{len(units)} units selected", True, _TITLE_COLOR)
-            self.screen.blit(count_text, (r.left + pad, r.top + pad))
-
-            # Type breakdown
-            type_counts: dict[str, int] = {}
-            for ent in units:
-                ut = ent.get("ut", "soldier")
-                type_counts[ut] = type_counts.get(ut, 0) + 1
-            y = r.top + pad + count_text.get_height() + 4
-            for ut, cnt in type_counts.items():
-                name = ut.replace("_", " ").title()
-                ts = sf.render(f"{name}: {cnt}", True, _STAT_LABEL)
-                self.screen.blit(ts, (r.left + pad, y))
-                y += ts.get_height() + 2
-
-    def _draw_cc_info(self, r: pygame.Rect, cc: dict) -> None:
-        """Show command center info in the display panel."""
-        pad = 8
-        tf = _get_font(18)
-        sf = _get_font(16)
-
-        y = r.top + pad
-        ns = tf.render("Command Center", True, _TITLE_COLOR)
-        self.screen.blit(ns, (r.left + pad, y))
-        y += ns.get_height() + 4
-
-        hp = cc.get("hp", CC_HP)
-        bw = min(r.width - pad * 2, 150)
-        bh = 6
-        ratio = hp / CC_HP if CC_HP > 0 else 0
-        pygame.draw.rect(self.screen, HEALTH_BAR_BG, (r.left + pad, y, bw, bh))
-        fg = HEALTH_BAR_FG if ratio > 0.35 else HEALTH_BAR_LOW
-        pygame.draw.rect(self.screen, fg, (r.left + pad, y, int(bw * ratio), bh))
-        ht = sf.render(f"{int(hp)}/{int(CC_HP)}", True, (200, 200, 220))
-        self.screen.blit(ht, (r.left + pad + bw + 6, y - 2))
-        y += bh + 6
-
-        spawn_type = cc.get("st", "soldier")
-        st_text = sf.render(f"Spawning: {spawn_type.replace('_', ' ').title()}", True, _STAT_LABEL)
-        self.screen.blit(st_text, (r.left + pad, y))
-
-    def _draw_tooltip(self, utype: str, action_rect: pygame.Rect) -> None:
-        """Draw a stats tooltip above the action panel."""
-        stats = UNIT_TYPES.get(utype, {})
-        tf = _get_font(20)
-        bf = _get_font(16)
-
-        rows: list[tuple[str, str]] = [
-            ("HP", str(stats.get("hp", 100))),
-            ("Speed", str(stats.get("speed", 0))),
-        ]
-        wpn = stats.get("weapon")
-        if wpn:
-            if wpn["damage"] < 0:
-                rows.append(("Heal/pulse", str(abs(wpn["damage"]))))
-            else:
-                rows.append(("Damage", str(wpn["damage"])))
-            rows.append(("Range", str(wpn["range"])))
-            cd = wpn["cooldown"]
-            rows.append(("Cooldown", f"{cd:.1f}s" if cd != int(cd)
-                          else f"{int(cd)}s"))
-
-        name = utype.replace("_", " ").title()
-        tt_pad = 10
-        tt_line_h = 20
-        tt_width = 170
-        tt_h = tt_pad + tt_line_h + 4 + len(rows) * tt_line_h + tt_pad
-        tt_x = action_rect.left + 10
-        tt_y = action_rect.top - tt_h - 6
-
-        rect = pygame.Rect(tt_x, tt_y, tt_width, tt_h)
-        pygame.draw.rect(self.screen, (22, 22, 34), rect, border_radius=6)
-        pygame.draw.rect(self.screen, (70, 70, 100), rect, 1, border_radius=6)
-
-        ts = tf.render(name, True, (220, 220, 240))
-        self.screen.blit(ts, (tt_x + tt_pad, tt_y + tt_pad))
-
-        ry = tt_y + tt_pad + tt_line_h + 4
-        for label, value in rows:
-            ls = bf.render(label, True, (140, 140, 165))
-            vs = bf.render(value, True, (200, 200, 220))
-            self.screen.blit(ls, (tt_x + tt_pad, ry))
-            self.screen.blit(vs, (tt_x + tt_width - tt_pad - vs.get_width(), ry))
-            ry += tt_line_h
+        """Draw the full HUD bar using gui.py through adapter proxies."""
+        proxies = wrap_entities(self._entities, self._selected_ids)
+        gui.draw_hud(
+            self.screen, proxies,
+            self.width, self.height, self._hud_h,
+            enable_t2=self._enable_t2,
+            t2_upgrades=self._t2_upgrades,
+        )
 
     # -- entity drawing (adapted from ReplayPlaybackScreen) -----------------
 
@@ -908,10 +1096,19 @@ class ClientGameScreen(BaseScreen):
     def _draw_team_labels(self, entities: list[dict]) -> None:
         font = _get_font(20)
         ws = self._world_surface
-        names = {
-            self._my_team: self._client._player_name,
-            3 - self._my_team: self._client.host_name,
-        }
+        # Use enriched player_names from game_start, fallback to client/host names
+        names: dict[int, str] = {}
+        if self._player_names:
+            # Build team→name mapping
+            pt = self._client.player_team
+            for pid, pname in self._player_names.items():
+                tm = pt.get(pid, pid)
+                names[tm] = pname
+        if not names:
+            names = {
+                self._my_team: self._client._player_name,
+                3 - self._my_team: self._client.opponent_name or self._client.host_name,
+            }
         for ent in entities:
             if ent.get("t") != "CC":
                 continue

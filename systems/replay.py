@@ -14,8 +14,9 @@ from typing import Any
 from entities.base import Entity
 from entities.unit import Unit
 from entities.metal_spot import MetalSpot
-from entities.laser import LaserFlash
+from entities.laser import LaserFlash, SplashEffect
 from entities.shapes import RectEntity, CircleEntity
+from config.settings import CC_SPAWN_INTERVAL, T2_UPGRADE_DURATION
 
 # How many game ticks between recorded frames (60 FPS game / 6 = ~10 FPS replay)
 RECORD_INTERVAL = 6
@@ -62,25 +63,56 @@ def _entity_visual(e: Entity) -> dict | None:
             "tm": e.team,
             "hp": int(e.hp),
             "ut": e.unit_type,
+            "pid": e.player_id,
+            "mhp": int(e.max_hp),
         }
-        # CC-specific replay fields
+        # CC-specific fields
         if e.unit_type == "command_center":
             d["t"] = "CC"
             d["pts"] = [list(p) for p in e.points]
             d["st"] = getattr(e, "spawn_type", "soldier")
-        # ME-specific replay fields
+            # Spawn progress (0.0–1.0)
+            timer = getattr(e, "_spawn_timer", 0.0)
+            d["spt"] = _q2(min(timer / CC_SPAWN_INTERVAL, 1.0)) if CC_SPAWN_INTERVAL > 0 else 0.0
+            # Bonus %
+            bonus = sum(me.get_spawn_bonus() for me in getattr(e, "metal_extractors", []))
+            d["bp"] = int(bonus * 100)
+        # ME-specific fields
         elif e.unit_type == "metal_extractor":
             d["t"] = "ME"
             d["rot"] = _q2(e.rotation)
+            d["us"] = e.upgrade_state
+            # Upgrade progress (0.0–1.0, 0 when not upgrading)
+            if e.upgrade_state.startswith("upgrading") and T2_UPGRADE_DURATION > 0:
+                d["utt"] = _q2(1.0 - e.upgrade_timer / T2_UPGRADE_DURATION)
+            else:
+                d["utt"] = 0.0
+            d["rut"] = e.researched_unit_type or ""
+            d["ifr"] = e.is_fully_reinforced
+            bonus = e.get_spawn_bonus()
+            d["meb"] = int(bonus * 100)
         else:
-            # Non-building units: record facing angle for FOV arc rendering
+            # Non-building units
             d["fa"] = _q2(e.facing_angle)
+            d["t2"] = e.is_t2
+            # Charge beam
+            cp = getattr(e, "_charge_pos", None)
+            if cp is not None:
+                d["chx"] = _q1(cp[0])
+                d["chy"] = _q1(cp[1])
+                ct = getattr(e, "_charge_timer", 0.0)
+                weapon = getattr(e, "weapon", None)
+                total = weapon.charge_time if weapon and weapon.charge_time > 0 else 1.0
+                d["chp"] = _q2(1.0 - ct / total)
         if e.target is not None:
             d["tx"] = _q1(e.target[0])
             d["ty"] = _q1(e.target[1])
         if e.attack_target is not None and e.attack_target.alive:
             d["atx"] = _q1(e.attack_target.x)
             d["aty"] = _q1(e.attack_target.y)
+        # Selection flag — set externally by broadcast before calling
+        if getattr(e, "selected", False):
+            d["sel"] = True
         return d
     if isinstance(e, MetalSpot):
         return {
@@ -94,6 +126,17 @@ def _entity_visual(e: Entity) -> dict | None:
         }
     # Obstacles and other shapes are stored in map.obstacles, not frames
     return None
+
+
+def _splash_visual(s: SplashEffect) -> dict:
+    """Compact dict representation of a splash effect."""
+    progress = 1.0 - (s.ttl / s._init_ttl) if s._init_ttl > 0 else 1.0
+    return {
+        "x": _q1(s.x),
+        "y": _q1(s.y),
+        "r": _q1(s.max_radius),
+        "p": _q2(progress),
+    }
 
 
 def _laser_visual(lf: LaserFlash) -> list:
