@@ -81,6 +81,7 @@ class Unit(CircleEntity, Damageable):
                 splash_damage_min=wdata.get("splash_damage_min", 0.0),
                 laser_flash_duration=wdata.get("laser_flash_duration", 0.0),
                 charge_time=wdata.get("charge_time", 0.0),
+                friendly_fire=wdata.get("friendly_fire", False),
             )
         else:
             self.weapon = None
@@ -98,6 +99,7 @@ class Unit(CircleEntity, Damageable):
 
         self.facing_angle: float = 0.0                                    # radians, 0 = right (+x)
         self.fov: float = math.radians(stats.get("fov", 90))             # stored in radians
+        self._fov_half_cos: float = math.cos(self.fov / 2)               # precomputed for dot-product FOV check
         self.turn_rate: float = math.radians(stats.get("turn_rate", 180)) # rad/s
         self.line_of_sight: float = float(stats.get("los", 100))         # pixels
 

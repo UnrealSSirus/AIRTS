@@ -9,7 +9,7 @@ from entities.unit import Unit, HOLD_FIRE, TARGET_FIRE, FREE_FIRE
 from entities.weapon import Weapon
 from entities.command_center import CommandCenter
 from entities.laser import LaserFlash, SplashEffect
-from core.helpers import line_intersects_circle, line_intersects_rect, angle_diff
+from core.helpers import line_intersects_circle, line_intersects_rect
 import config.audio as audio
 
 if TYPE_CHECKING:
@@ -28,64 +28,47 @@ class PendingChain:
 
 def _has_los(x1: float, y1: float, x2: float, y2: float,
              circle_obs, rect_obs) -> bool:
-    """LOS check using pre-extracted obstacle tuples (no isinstance)."""
+    """LOS check using pre-extracted obstacle tuples.
+
+    An AABB pre-filter rejects obstacles whose bounding box does not overlap
+    the segment's bounding box before the full geometric test is attempted.
+    """
+    seg_min_x = x1 if x1 < x2 else x2
+    seg_max_x = x2 if x1 < x2 else x1
+    seg_min_y = y1 if y1 < y2 else y2
+    seg_max_y = y2 if y1 < y2 else y1
     for cx, cy, r in circle_obs:
+        if cx + r < seg_min_x or cx - r > seg_max_x:
+            continue
+        if cy + r < seg_min_y or cy - r > seg_max_y:
+            continue
         if line_intersects_circle(x1, y1, x2, y2, cx, cy, r):
             return False
     for rx, ry, rw, rh in rect_obs:
+        if rx + rw < seg_min_x or rx > seg_max_x:
+            continue
+        if ry + rh < seg_min_y or ry > seg_max_y:
+            continue
         if line_intersects_rect(x1, y1, x2, y2, rx, ry, rw, rh):
             return False
     return True
 
 
-def _in_fov(unit: Unit, tx: float, ty: float) -> bool:
-    """Return True if (tx, ty) is within the unit's field of view."""
-    to_target = math.atan2(ty - unit.y, tx - unit.x)
-    return abs(angle_diff(unit.facing_angle, to_target)) <= unit.fov / 2
+def _in_fov(unit: Unit, tx: float, ty: float,
+            facing_x: float, facing_y: float) -> bool:
+    """Return True if (tx, ty) is within the unit's field of view.
 
-
-def _find_rotation_target(
-    a: Unit,
-    ax: float, ay: float,
-    quadfield: QuadField,
-    circle_obs, rect_obs,
-) -> Entity | None:
-    """Find nearest enemy/ally within LOS range for facing, even outside weapon range."""
-    los = a.line_of_sight
-    healer = a.weapon is not None and a.weapon.hits_only_friendly
-
-    if healer:
-        # Look for wounded allies within LOS
-        allies = quadfield.get_team_units_exact(ax, ay, los, a.team)
-        best = None
-        best_dsq = float("inf")
-        for u in allies:
-            if u is a:
-                continue
-            if u.hp >= u.max_hp:
-                continue
-            if isinstance(u, CommandCenter):
-                continue
-            dx = u.x - ax
-            dy = u.y - ay
-            dsq = dx * dx + dy * dy
-            if dsq < best_dsq:
-                best_dsq = dsq
-                best = u
-        return best
-    else:
-        # Look for nearest enemy within LOS
-        enemies = quadfield.get_enemy_units_exact(ax, ay, los, a.team)
-        best = None
-        best_dsq = float("inf")
-        for b in enemies:
-            dx = b.x - ax
-            dy = b.y - ay
-            dsq = dx * dx + dy * dy
-            if dsq < best_dsq:
-                best_dsq = dsq
-                best = b
-        return best
+    Uses a dot-product check against the precomputed facing vector instead of
+    atan2, avoiding trigonometry on the per-target hot path.
+    *facing_x/y* must be (cos(facing_angle), sin(facing_angle)) for the unit.
+    """
+    dx = tx - unit.x
+    dy = ty - unit.y
+    d_sq = dx * dx + dy * dy
+    if d_sq < 1e-12:
+        return True
+    inv_d = 1.0 / math.sqrt(d_sq)
+    return (dx * facing_x + dy * facing_y) * inv_d >= unit._fov_half_cos
 
 
 def combat_step(
@@ -127,6 +110,14 @@ def combat_step(
         a_range = wpn.range
         a_dmg = wpn.damage
         a_cd = wpn.cooldown
+        a_range_sq = a.attack_range_sq                        # #1: avoid sqrt on range checks
+        full_fov = a.fov >= math.tau - 0.01                   # #2: 360° units skip FOV check
+        if not full_fov:                                       # #4: precompute facing vector
+            a_facing_x = math.cos(a.facing_angle)
+            a_facing_y = math.sin(a.facing_angle)
+        else:
+            a_facing_x = a_facing_y = 0.0
+        rot_target: Unit | None = None                        # #3: healer rotation candidate
 
         # -- Active charge: count down and fire at locked world position -------
         if a._charge_pos is not None:
@@ -138,10 +129,7 @@ def combat_step(
 
                 # Direct hit: find enemy whose hitbox contains the impact point
                 direct_hit: Unit | None = None
-                if quadfield is not None:
-                    _cands = quadfield.get_enemy_units_exact(tx, ty, 15, a.team)
-                else:
-                    _cands = units
+                _cands = quadfield.get_enemy_units_exact(tx, ty, 15, a.team)
                 _best_dsq = float("inf")
                 for u in _cands:
                     if not u.alive:
@@ -165,18 +153,20 @@ def combat_step(
                             if was_alive and not direct_hit.alive:
                                 stats.record_kill(a.team, tt)
 
-                # Splash to all enemies near impact (excluding direct hit unit)
+                # Splash to all units near impact (excluding direct hit unit)
                 if wpn.splash_radius > 0:
                     splash_r_sq = wpn.splash_radius * wpn.splash_radius
-                    if quadfield is not None:
+                    if wpn.friendly_fire:                          # friendly fire: hit all
+                        _scands = quadfield.get_units_exact(tx, ty, wpn.splash_radius)
+                    else:
                         _scands = quadfield.get_enemy_units_exact(
                             tx, ty, wpn.splash_radius, a.team)
-                    else:
-                        _scands = units
                     for u in _scands:
                         if u is direct_hit or not u.alive:
                             continue
-                        if hasattr(u, "team") and u.team == a.team:
+                        if u is a:
+                            continue
+                        if not wpn.friendly_fire and hasattr(u, "team") and u.team == a.team:
                             continue
                         dx = u.x - tx
                         dy = u.y - ty
@@ -197,8 +187,9 @@ def combat_step(
                     if splash_effects is not None:
                         splash_effects.append(SplashEffect(tx, ty, wpn.splash_radius))
 
-                for ability in a.abilities:
-                    ability.on_fire(a)
+                if a.abilities:                                    # #8: skip loop for unitless units
+                    for ability in a.abilities:
+                        ability.on_fire(a)
                 lc = wpn.laser_color
                 w = wpn.laser_width
                 # Beam endpoint is the locked world position (no target tracking)
@@ -221,34 +212,30 @@ def combat_step(
             if a.fire_mode == HOLD_FIRE:
                 pass
             elif wpn.hits_only_friendly:
-                # Always search within weapon range for the nearest wounded ally.
-                # nearest_ally is the geometrically closest ally regardless of range
-                # or HP, so relying on it causes healers to miss hurt units inside
-                # range when the closest ally is wounded but farther away.
-                if quadfield is not None:
-                    candidates = quadfield.get_team_units_exact(ax, ay, a_range, a.team)
-                else:
-                    candidates = units
-                # Strict center-to-center range check — the quadfield uses
-                # radius + u.radius overlap semantics, so a secondary exact
-                # check is needed to honour the weapon's stated range.
-                a_range_sq: float = a_range * a_range
+                # Single query at LOS range covers both weapon-range healing and
+                # rotation-target tracking (#3), eliminating the second quadfield
+                # call that _find_rotation_target previously issued.
+                candidates = quadfield.get_team_units_exact(ax, ay, a.line_of_sight, a.team)
                 best_hurt: Unit | None = None
                 best_hurt_dsq = float("inf")
+                rot_target_dsq = float("inf")
                 for u in candidates:
                     if u is a or not u.alive or isinstance(u, CommandCenter):
                         continue
-                    if u.team != a.team or u.hp >= u.max_hp:
+                    if u.team != a.team:
                         continue
                     dx, dy = u.x - ax, u.y - ay
                     dsq = dx * dx + dy * dy
-                    if dsq > a_range_sq:
+                    if dsq < rot_target_dsq:           # track nearest ally for rotation
+                        rot_target_dsq = dsq
+                        rot_target = u
+                    if dsq > a_range_sq or u.hp >= u.max_hp:
                         continue
                     if dsq < best_hurt_dsq:
                         best_hurt_dsq = dsq
                         best_hurt = u
                 if (best_hurt is not None
-                        and _in_fov(a, best_hurt.x, best_hurt.y)
+                        and (full_fov or _in_fov(a, best_hurt.x, best_hurt.y, a_facing_x, a_facing_y))
                         and _has_los(ax, ay, best_hurt.x, best_hurt.y, circle_obs, rect_obs)):
                     best_target = best_hurt
             else:
@@ -260,21 +247,30 @@ def combat_step(
 
                 if a.fire_mode == TARGET_FIRE:
                     if preferred is not None:
-                        d = math.hypot(preferred.x - ax, preferred.y - ay)
-                        if d <= a_range and _in_fov(a, preferred.x, preferred.y) and _has_los(ax, ay, preferred.x, preferred.y, circle_obs, rect_obs):
+                        dx = preferred.x - ax
+                        dy = preferred.y - ay
+                        if (dx * dx + dy * dy <= a_range_sq                       # #1: no sqrt
+                                and (full_fov or _in_fov(a, preferred.x, preferred.y, a_facing_x, a_facing_y))  # #2 #4
+                                and _has_los(ax, ay, preferred.x, preferred.y, circle_obs, rect_obs)):
                             best_target = preferred
                 else:
                     # FREE_FIRE: prefer manual target, fall back to nearest_enemy
                     if preferred is not None:
-                        d = math.hypot(preferred.x - ax, preferred.y - ay)
-                        if d <= a_range and _in_fov(a, preferred.x, preferred.y) and _has_los(ax, ay, preferred.x, preferred.y, circle_obs, rect_obs):
+                        dx = preferred.x - ax
+                        dy = preferred.y - ay
+                        if (dx * dx + dy * dy <= a_range_sq                       # #1
+                                and (full_fov or _in_fov(a, preferred.x, preferred.y, a_facing_x, a_facing_y))  # #2 #4
+                                and _has_los(ax, ay, preferred.x, preferred.y, circle_obs, rect_obs)):
                             best_target = preferred
 
                     if best_target is None:
                         enemy = a.nearest_enemy
                         if enemy is not None and enemy.alive:
-                            d = math.hypot(enemy.x - ax, enemy.y - ay)
-                            if d <= a_range and _in_fov(a, enemy.x, enemy.y) and _has_los(ax, ay, enemy.x, enemy.y, circle_obs, rect_obs):
+                            dx = enemy.x - ax
+                            dy = enemy.y - ay
+                            if (dx * dx + dy * dy <= a_range_sq                   # #1
+                                    and (full_fov or _in_fov(a, enemy.x, enemy.y, a_facing_x, a_facing_y))  # #2 #4
+                                    and _has_los(ax, ay, enemy.x, enemy.y, circle_obs, rect_obs)):
                                 best_target = enemy
 
         if best_target is not None:
@@ -293,8 +289,9 @@ def combat_step(
                     stats.record_healing(a.team, actual)
 
                 a.laser_cooldown = a_cd
-                for ability in a.abilities:
-                    ability.on_fire(a)
+                if a.abilities:                                    # #8
+                    for ability in a.abilities:
+                        ability.on_fire(a)
                 lc = wpn.laser_color
                 w = wpn.laser_width
                 laser_flashes.append(
@@ -322,13 +319,17 @@ def combat_step(
                 if wpn.splash_radius > 0:
                     tx, ty = best_target.x, best_target.y
                     splash_r_sq = wpn.splash_radius * wpn.splash_radius
-                    if quadfield is not None:
+                    if wpn.friendly_fire:                          # friendly fire: hit all
+                        splash_candidates = quadfield.get_units_exact(tx, ty, wpn.splash_radius)
+                    else:
                         splash_candidates = quadfield.get_enemy_units_exact(
                             tx, ty, wpn.splash_radius, a.team)
-                    else:
-                        splash_candidates = units
                     for u in splash_candidates:
                         if u is best_target or not u.alive:
+                            continue
+                        if u is a:
+                            continue
+                        if not wpn.friendly_fire and hasattr(u, "team") and u.team == a.team:
                             continue
                         dx = u.x - tx
                         dy = u.y - ty
@@ -351,8 +352,9 @@ def combat_step(
                             tx, ty, wpn.splash_radius))
 
                 a.laser_cooldown = a_cd
-                for ability in a.abilities:
-                    ability.on_fire(a)
+                if a.abilities:                                    # #8
+                    for ability in a.abilities:
+                        ability.on_fire(a)
                 lc = wpn.laser_color
                 w = wpn.laser_width
                 laser_flashes.append(
@@ -378,12 +380,10 @@ def combat_step(
                     ))
         else:
             if wpn.hits_only_friendly:
-                # Healer: rotate toward nearest wounded ally in LOS range so
-                # the 30° FOV cone aligns before weapon range is reached.
-                if quadfield is not None:
-                    rot = _find_rotation_target(a, ax, ay, quadfield, circle_obs, rect_obs)
-                    if rot is not None:
-                        a._facing_target = rot
+                # Healer: use the rotation candidate collected during the single
+                # LOS-range query above (populated when off cooldown).
+                if rot_target is not None:
+                    a._facing_target = rot_target
             elif a.nearest_enemy is not None:
                 a._facing_target = a.nearest_enemy
 
@@ -404,11 +404,7 @@ def combat_step(
             best_dist_sq = float("inf")
             cr_sq = chain.weapon.chain_range ** 2
 
-            # Use quadfield for spatial query, fall back to brute-force
-            if quadfield is not None:
-                enemies = quadfield.get_enemy_units_exact(ox, oy, chain.weapon.chain_range, chain.team)
-            else:
-                enemies = units
+            enemies = quadfield.get_enemy_units_exact(ox, oy, chain.weapon.chain_range, chain.team)
             for b in enemies:
                 if not b.alive or b.entity_id in chain.hit_set:
                     continue

@@ -51,35 +51,17 @@ Requires a C compiler: MSVC on Windows ("Desktop development with C++" workload)
 
 ## Game Modes
 
-Configure the `team_ai` parameter in `main.py` to set up different game modes:
+The Create Lobby screen lets you configure player slots and AI assignments:
 
-| Mode                | `team_ai=`                                     | Description                          |
-|---------------------|-------------------------------------------------|--------------------------------------|
-| Human vs AI         | `{2: WanderAI()}`                               | You control Team 1, AI controls Team 2 |
-| AI vs Human         | `{1: MyAI()}`                                   | AI controls Team 1, you control Team 2 |
-| AI vs AI (spectator)| `{1: MyAI(), 2: WanderAI()}`                    | Watch two AIs battle each other      |
+| Mode | Description |
+|---|---|
+| Human vs AI | You control one team; an AI controls the other |
+| AI vs AI | Watch two AIs battle in spectator mode |
+| Multiplayer | Host or join a networked game (LAN/local) |
 
-At least one team must have an AI controller — Human-vs-Human is not supported.
+### Headless (command line)
 
-### Example: Running AI vs AI
-
-```python
-# main.py
-from game import Game
-from systems.map_generator import DefaultMapGenerator
-from systems.ai import WanderAI
-from my_ai import MyAI  # your custom AI
-
-def main():
-    game = Game(
-        width=800,
-        height=600,
-        title="AIRTS",
-        map_generator=DefaultMapGenerator(),
-        team_ai={1: MyAI(), 2: WanderAI()},
-    )
-    game.run()
-
-if __name__ == "__main__":
-    main()
+```bash
+python main.py --headless --team1 wander --team2 wander --time-limit 15
+python main.py --list-ais   # list available AI ids
 ```
