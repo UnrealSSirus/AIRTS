@@ -11,6 +11,7 @@ class Weapon:
     laser_color: tuple      # RGB
     laser_width: int = 1
     hits_only_friendly: bool = False
+    friendly_fire: bool = False     # splash hits own team too
     sound: str = "fast_laser"
     chain_range: float = 0.0    # 0 = no chaining
     chain_delay: float = 0.0    # seconds between bounces
