@@ -205,9 +205,9 @@ class GameClient:
         """Send queued commands to the host."""
         while self._running:
             try:
-                cmd_raw = self._outbound_commands.get(timeout=0.05)
+                cmd_raw = self._outbound_commands.get_nowait()
             except queue.Empty:
-                await asyncio.sleep(0.01)
+                await asyncio.sleep(0.005)
                 continue
             try:
                 await send_message(writer, {

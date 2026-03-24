@@ -47,6 +47,17 @@ class InternalServer:
         self._owns_host = existing_host is None
 
         self._command_queue = CommandQueue()
+
+        # Determine human player_id so the connecting client gets the right ID.
+        # Without this, the client would always get player_id=2 (LAN host default),
+        # which is wrong when the human is player 1 and the bot is player 2.
+        if player_team:
+            all_pids = set(player_team.keys())
+        else:
+            all_pids = {1, 2}
+        human_pids = all_pids - set(player_ai.keys())
+        first_player_id = min(human_pids) if human_pids else 1
+
         if existing_host is not None:
             self._host = existing_host
             # Update its broadcast interval for local play
@@ -58,6 +69,7 @@ class InternalServer:
                 host_name=host_name,
                 max_players=max_players,
                 broadcast_interval=2,  # ~33ms for local play (smoother than default 6)
+                first_player_id=first_player_id,
             )
 
         self._result: dict[str, Any] | None = None

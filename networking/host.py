@@ -53,6 +53,7 @@ class GameHost:
         host_name: str = "Host",
         max_players: int = 1,
         broadcast_interval: int = RECORD_INTERVAL,
+        first_player_id: int | None = None,
     ):
         self._command_queue = command_queue
         self._port = port
@@ -66,7 +67,10 @@ class GameHost:
         # Multi-client tracking: player_id → ClientConnection
         self._clients: dict[int, ClientConnection] = {}
         self._clients_lock = threading.Lock()
-        self._next_player_id = 2 if max_players == 1 else 1  # LAN: client=2; dedicated: start at 1
+        if first_player_id is not None:
+            self._next_player_id = first_player_id
+        else:
+            self._next_player_id = 2 if max_players == 1 else 1  # LAN: client=2; dedicated: start at 1
 
         self._running = True
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -362,9 +366,9 @@ class GameHost:
         """Send queued state frames to a specific client."""
         while self._running:
             try:
-                frame = outbound.get(timeout=0.05)
+                frame = outbound.get_nowait()
             except queue.Empty:
-                await asyncio.sleep(0.01)
+                await asyncio.sleep(0.005)
                 continue
             try:
                 await send_message(writer, frame)

@@ -2,6 +2,7 @@
 from __future__ import annotations
 import math
 import random
+import sys
 import time
 from typing import Any
 import pygame
@@ -1734,46 +1735,73 @@ class Game:
         *post_step(tick, entities, laser_flashes, winner)* is called after each
         tick (e.g. to broadcast state to clients).
         """
+        # On Windows, increase timer resolution from ~15.6ms to ~1ms so that
+        # time.sleep() is accurate enough for a 60Hz game loop.
+        _win_timer = False
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                ctypes.windll.winmm.timeBeginPeriod(1)
+                _win_timer = True
+            except Exception:
+                pass
+
         self.running = True
         self._phase = "playing"
 
         tick_interval = FIXED_DT / 1.0  # ~16.67ms at 60 ticks/sec
         next_tick = time.perf_counter()
 
-        while self.running and self._phase == "playing":
-            now = time.perf_counter()
+        try:
+            while self.running and self._phase == "playing":
+                now = time.perf_counter()
 
-            # Always drain commands even while paused (so unpause arrives)
-            if pre_step:
-                pre_step()
+                # Always drain commands even while paused (so unpause arrives)
+                if pre_step:
+                    pre_step()
 
-            if self._paused:
-                time.sleep(0.016)
-                # Still broadcast current state so clients stay in sync
+                if self._paused:
+                    time.sleep(0.016)
+                    # Still broadcast current state so clients stay in sync
+                    if post_step:
+                        post_step(self._iteration, self.entities,
+                                  self.laser_flashes, self._winner)
+                    next_tick = time.perf_counter()
+                    continue
+
+                effective_interval = tick_interval / self._speed_multiplier
+                if now < next_tick:
+                    sleep_time = next_tick - now
+                    # Sleep most of the remaining time, then yield for the rest.
+                    # Use a shorter sleep to avoid Windows oversleeping.
+                    if sleep_time > 0.002:
+                        time.sleep(sleep_time - 0.002)
+                    else:
+                        time.sleep(0)  # yield timeslice to other threads
+                    continue
+
+                # Cap catch-up: if we fell too far behind (e.g. GIL contention),
+                # don't try to replay dozens of ticks — just reset to now.
+                if now - next_tick > effective_interval * 4:
+                    next_tick = now
+
+                next_tick += effective_interval
+
+                self.step(FIXED_DT)
+
                 if post_step:
                     post_step(self._iteration, self.entities,
                               self.laser_flashes, self._winner)
-                next_tick = time.perf_counter()
-                continue
 
-            effective_interval = tick_interval / self._speed_multiplier
-            if now < next_tick:
-                sleep_time = next_tick - now
-                if sleep_time > 0.0005:
-                    time.sleep(sleep_time - 0.0004)
-                continue
-
-            next_tick += effective_interval
-
-            self.step(FIXED_DT)
-
-            if post_step:
-                post_step(self._iteration, self.entities,
-                          self.laser_flashes, self._winner)
-
-            # If phase transitioned to explode, the game is over
-            if self._phase == "explode":
-                self.running = False
+                # If phase transitioned to explode, the game is over
+                if self._phase == "explode":
+                    self.running = False
+        finally:
+            if _win_timer:
+                try:
+                    ctypes.windll.winmm.timeEndPeriod(1)
+                except Exception:
+                    pass
 
         # Build result dict (same as run())
         stats_data = self._stats.finalize(self._winner, self.entities)
