@@ -182,12 +182,62 @@ class App:
             "player_name": player_name,
         }
 
-        # --- Route through InternalServer → GameClient → ClientGameScreen ---
+        # Determine if there are human players
+        all_pids = set(player_team.keys()) if player_team else {1, 2}
+        human_pids = all_pids - set(player_ai.keys())
+        headless: bool = data.get("headless", False)
+        has_human = len(human_pids) > 0 and not headless
+
+        map_gen = DefaultMapGenerator(obstacle_count=obs,
+                                      metal_spots_per_side=metal_spots)
+
+        if not has_human:
+            # --- Bot-vs-bot or headless: run Game directly, no client needed ---
+            from game import Game
+            save_debug_summary: bool = data.get("save_debug_summary", False)
+            screen_w = self._screen.get_width()
+            screen_h = self._screen.get_height()
+
+            game = Game(
+                width=width, height=height,
+                map_generator=map_gen,
+                player_ai=player_ai,
+                player_team=player_team,
+                screen=self._screen,
+                clock=self._clock,
+                replay_config=replay_config,
+                player_name=player_name,
+                headless=headless,
+                max_ticks=max_ticks,
+                save_debug_summary=save_debug_summary,
+                screen_width=screen_w,
+                screen_height=screen_h,
+                enable_t2=enable_t2,
+            )
+
+            try:
+                result = game.run()
+            except Exception as exc:
+                path = log_crash(exc, context="game")
+                print(f"[AIRTS] Game crashed — log saved to {path}")
+                return ScreenResult("crash_notice",
+                                    data={"log_path": path, "context": "game"})
+
+            return ScreenResult("results", data={
+                "winner": result.get("winner", 0),
+                "human_teams": result.get("human_teams", set()),
+                "stats": result.get("stats"),
+                "replay_filepath": result.get("replay_filepath"),
+                "team_names": result.get("team_names", {}),
+                "player_names": result.get("player_names", {}),
+                "player_team": result.get("player_team", {}),
+            })
+
+        # --- Human present: route through InternalServer → GameClient → ClientGameScreen ---
         server = InternalServer(
             width=width,
             height=height,
-            map_generator=DefaultMapGenerator(obstacle_count=obs,
-                                                metal_spots_per_side=metal_spots),
+            map_generator=map_gen,
             player_ai=player_ai,
             player_team=player_team,
             replay_config=replay_config,
