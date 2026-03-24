@@ -28,21 +28,57 @@ CCs start with a full spawn timer so the first unit spawns immediately.
 
 ## Units
 
-There are five unit types, each with different stats and roles:
+There are eight unit types plus T2 variants of each:
 
-| Type            | HP  | Speed | Radius | Damage | Range | Cooldown | Special                                    |
-|-----------------|-----|-------|--------|--------|-------|----------|--------------------------------------------|
-| Soldier         | 100 | 40    | 5      | 10     | 50    | 2.0 s    | Basic all-rounder                          |
-| Medic           | 100 | 40    | 5      | 0      | 0     | —        | Heals 2 nearest allies at 5 HP/s within 40 px |
-| Tank            | 300 | 20    | 7      | 5      | 50    | 2.0 s    | High HP, larger radius, low damage         |
-| Sniper          | 50  | 40    | 5      | 30     | 150   | 6.0 s    | Long range, high damage, fragile           |
-| Machine Gunner  | 70  | 40    | 5      | 1      | 50    | 0.2 s    | Very fast fire rate, low per-shot damage   |
+### Tier 1 Units
+
+| Type            | HP  | Speed | Radius | Damage | Range | Cooldown | Special                                           |
+|-----------------|-----|-------|--------|--------|-------|----------|---------------------------------------------------|
+| Soldier         | 100 | 40    | 5      | 10     | 50    | 1.5 s    | Basic all-rounder                                 |
+| Medic           | 50  | 40    | 5      | —      | 50    | 0.3 s    | Heals nearby allies with a heal laser             |
+| Tank            | 250 | 20    | 7      | 7      | 50    | 2.0 s    | High HP, larger radius; **ReactiveArmor** passive |
+| Sniper          | 50  | 30    | 5      | 35     | 140   | 6.0 s    | Long range, high damage, fragile; **Focus** passive |
+| Machine Gunner  | 70  | 40    | 5      | 1      | 50    | 0.1 s    | Very fast fire rate, low per-shot damage          |
+| Scout           | 15  | 90    | 4      | 4      | 15    | 0.5 s    | Spawns 3 per spawn cycle; fast but fragile        |
+| Shockwave       | 70  | 30    | 5      | 7      | 60    | 3.0 s    | Chain laser — bounces to nearby enemies (70 px)   |
+| Artillery       | 50  | 20    | 10     | 100    | 160   | 6.0 s    | Massive splash (40 px radius); **friendly fire**; charge time 2 s |
+
+### Tier 2 Units
+
+T2 units are upgraded variants unlocked by building a **Research Lab** from a captured metal extractor. All T2 variants are suffixed `_t2` (e.g. `"soldier_t2"`).
+
+| Type               | HP  | Speed | Damage | Range | Cooldown | Key changes vs T1                                       |
+|--------------------|-----|-------|--------|-------|----------|---------------------------------------------------------|
+| `soldier_t2`       | 125 | 42    | 15     | 55    | 1.4 s    | More HP, damage, and range                              |
+| `medic_t2`         | 75  | 60    | —      | 70    | 0.2 s    | Faster and longer-ranged healer                         |
+| `tank_t2`          | 400 | 20    | 7      | 50    | 2.0 s    | More HP; **ElectricArmor** passive                      |
+| `sniper_t2`        | 65  | 35    | 45     | 150   | 5.0 s    | More HP and damage, faster fire                         |
+| `machine_gunner_t2`| 80  | 30    | 3      | 75    | 0.1 s    | More HP, longer range, higher damage per shot           |
+| `scout_t2`         | 12  | 110   | 5      | 30    | 0.3 s    | Spawns 6 per cycle; even faster                         |
+| `shockwave_t2`     | 50  | 30    | 15     | 90    | 3.0 s    | Higher damage and range; shorter chain range (50 px)    |
+| `artillery_t2`     | 120 | 15    | 100    | 180   | 6.0 s    | More HP, longer range; massive splash (75 px); charge 3 s |
 
 ### Medic Details
 
-- Cannot attack (damage = 0, `can_attack = False`).
-- Heals up to **2** friendly units simultaneously within **40 px** at **5 HP/s** each.
-- Prioritizes the closest wounded allies.
+- Fires a **heal laser** (`hits_only_friendly = True`) that heals nearby allies instead of damaging them.
+- Damage value is negative (−1 per tick at 0.3 s cooldown = effectively heals ~3.3 HP/s per shot).
+- Prioritizes the closest wounded allies within 50 px.
+
+### Scout Details
+
+- Spawns **3 units** per CC spawn cycle (T2: **6 units**).
+- Very short attack range (15 px / 30 px T2) — effective at swarming, not dueling.
+
+### Shockwave / Chain Laser
+
+- On each attack, the laser **chains** to additional enemies within the chain range (70 px / 50 px T2).
+- Chain delay between bounces: 0.2 s (T2: 0.1 s).
+
+### Artillery Details
+
+- Has a **charge time** of 2 s (T2: 3 s) before each shot fires.
+- **Splash damage** hits all units (friend and foe) within the blast radius.
+- Very narrow field of view (15°) and slow turn rate (45°/s) — requires facing the target.
 
 ## Combat
 
@@ -50,7 +86,7 @@ There are five unit types, each with different stats and roles:
 
 All combat is resolved through laser attacks. When a unit or CC fires:
 1. The attacker checks for enemies within its attack range.
-2. A **line-of-sight (LOS)** check ensures no obstacles block the shot (using line-circle and line-rect intersection tests).
+2. A **line-of-sight (LOS)** check ensures no obstacles block the shot.
 3. If a valid target is found, the target takes damage immediately and a laser flash visual is spawned.
 4. The attacker enters cooldown and cannot fire again until the cooldown elapses.
 
@@ -73,6 +109,17 @@ from entities.unit import HOLD_FIRE, TARGET_FIRE, FREE_FIRE
 
 Command Centers always fire at the closest enemy within range (75 px). They do not use fire modes — they behave like permanent Free Fire.
 
+## Passive Abilities
+
+Certain unit types carry passive abilities that activate automatically.
+
+| Ability         | Unit         | Effect                                                                                     |
+|-----------------|--------------|--------------------------------------------------------------------------------------------|
+| **ReactiveArmor** | Tank (T1)  | Gains a charge every 5 s (max 2). Each charge reduces incoming damage by 50%. Loses all charges when hit. |
+| **ElectricArmor** | Tank T2    | Gains a stack every 1 s (max 8). Each stack: 60% damage reduction, +1 HP/s regen, +20% speed. Loses one stack per hit. |
+| **Focus**         | Sniper (T1) | After firing, speed drops to 25% and gradually recovers over 3 seconds.                  |
+| **Reinforce**     | Metal Extractor | Builds plating stacks over time (4 stacks, 15 s each). At full stacks, gains +100 HP and doubles spawn bonus. |
+
 ## Metal Spots & Extractors
 
 Metal spots are neutral resource nodes scattered symmetrically across the map. Capturing them boosts your CC's spawn rate.
@@ -89,12 +136,21 @@ Metal spots are neutral resource nodes scattered symmetrically across the map. C
 
 | Property        | Value  |
 |-----------------|--------|
-| HP              | 200    |
-| Spawn boost     | 1.05x per extractor (multiplicative) |
+| HP              | 150    |
+| Spawn boost     | +8% additive per extractor |
 
-Each extractor owned by a CC multiplies the CC's spawn timer rate by **1.05**. With 3 extractors, the timer advances at `1.05^3 ≈ 1.157x` speed.
+Each extractor owned by a CC adds an 8% multiplicative boost to the CC's spawn timer rate. Metal extractors are **selectable** — clicking one shows its health bar and info.
 
-When a metal extractor is destroyed, the metal spot is released and becomes capturable again.
+### T2 Extractor Upgrades
+
+A captured metal extractor can be upgraded (when T2 is enabled) into one of two structures:
+
+| Structure        | Effect                                                   |
+|------------------|----------------------------------------------------------|
+| **Watch Tower**  | Fires a defensive laser (65 px range, 15 dmg, 2 s CD); heals nearby friendlies at 1 HP/s; +20% spawn bonus |
+| **Research Lab** | Enables T2 unit spawns from the CC; +20% spawn bonus; +100 CC max HP |
+
+Upgrades take 60 seconds to complete during which the extractor provides no spawn bonus.
 
 ## Map Layout
 
@@ -108,7 +164,7 @@ Default map size is **800 x 600** pixels.
 ## Player Controls (Human Teams)
 
 ### Selection
-- **Left-click** a unit or CC to select it (deselects others).
+- **Left-click** a unit, CC, or metal extractor to select it (deselects others).
 - **Left-click + drag** to draw a circle selection. All units inside are selected. If only a CC is enclosed, it is selected instead.
 - **Shift + click/drag** adds to the current selection without deselecting.
 
@@ -120,6 +176,10 @@ Default map size is **800 x 600** pixels.
 ### Spawn Type Selection
 - When a CC is selected, a GUI panel appears at the bottom of the screen with buttons for each unit type.
 - Click a button to change which unit type the CC will spawn next.
+
+### Camera
+- **Edge pan** — move the mouse to the screen edge to pan the camera.
+- **Scroll wheel** — zoom in/out.
 
 ### Other
 - **Escape** quits the game.
