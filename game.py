@@ -1761,6 +1761,9 @@ class Game:
                     pre_step()
 
                 if self._paused:
+                    # Apply queued commands so set_pause/set_speed are processed
+                    for cmd in self._command_queue.drain(self._iteration + 999999):
+                        self._apply_command(cmd)
                     time.sleep(0.016)
                     # Still broadcast current state so clients stay in sync
                     if post_step:

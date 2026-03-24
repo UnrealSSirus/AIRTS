@@ -73,7 +73,7 @@ UNIT_TYPES = {
         "hp": 250, "speed": 20, "radius": 7,
         "symbol": TANK_SYMBOL, "can_attack": True,
         "fov": 150, "turn_rate": 180, "los": 100,
-        "weapon": {"name": "Laser", "damage": 7, "range": 50, "cooldown": 2.0},
+        "weapon": {"name": "Laser", "damage": 8, "range": 45, "cooldown": 2.0},
     },
     "sniper": {
         "hp": 50, "speed": 30, "radius": 5,
@@ -105,7 +105,7 @@ UNIT_TYPES = {
         },
     },
     "artillery": {
-        "hp": 50, "speed": 20, "radius": 10,
+        "hp": 50, "speed": 20, "radius": 7,
         "symbol": ARTILLERY_SYMBOL, "can_attack": True,
         "fov": 15, "turn_rate": 45, "los": 250,
         "weapon": {
@@ -134,14 +134,14 @@ UNIT_TYPES = {
     # -- T2 unit types --------------------------------------------------------
     # Full definitions — edit these directly to differentiate T2 from T1.
     "soldier_t2": {
-        "hp": 125, "speed": 42, "radius": 5,
+        "hp": 125, "speed": 40, "radius": 6,
         "symbol": None, "can_attack": True,
         "fov": 90, "turn_rate": 180, "los": 100,
-        "weapon": {"name": "Laser", "damage": 15, "range": 55, "cooldown": 1.4},
+        "weapon": {"name": "Laser", "damage": 12, "range": 60, "cooldown": 1.5},
         "is_t2": True,
     },
     "medic_t2": {
-        "hp": 75, "speed": 60, "radius": 5,
+        "hp": 75, "speed": 60, "radius": 6,
         "symbol": MEDIC_SYMBOL, "can_attack": True,
         "fov": 30, "turn_rate": 180, "los": 80,
         "weapon": {
@@ -151,14 +151,14 @@ UNIT_TYPES = {
         "is_t2": True,
     },
     "tank_t2": {
-        "hp": 400, "speed": 20, "radius": 7,
+        "hp": 350, "speed": 20, "radius": 9,
         "symbol": TANK_SYMBOL, "can_attack": True,
         "fov": 150, "turn_rate": 180, "los": 100,
-        "weapon": {"name": "Laser", "damage": 7, "range": 50, "cooldown": 2.0},
+        "weapon": {"name": "Laser", "damage": 10, "range": 50, "cooldown": 2.0},
         "is_t2": True,
     },
     "sniper_t2": {
-        "hp": 65, "speed": 35, "radius": 5,
+        "hp": 65, "speed": 35, "radius": 6,
         "symbol": SNIPER_SYMBOL, "can_attack": True,
         "fov": 45, "turn_rate": 180, "los": 200,
         "weapon": {"name": "Heavy Laser", "damage": 45, "range": 150, "cooldown": 5.0,
@@ -166,7 +166,7 @@ UNIT_TYPES = {
         "is_t2": True,
     },
     "machine_gunner_t2": {
-        "hp": 80, "speed": 30, "radius": 5,
+        "hp": 80, "speed": 30, "radius": 6,
         "symbol": MACHINE_GUNNER_SYMBOL, "can_attack": True,
         "fov": 180, "turn_rate": 180, "los": 100,
         "weapon": {"name": "Laser", "damage": 3, "range": 75, "cooldown": 0.1},
@@ -181,7 +181,7 @@ UNIT_TYPES = {
         "is_t2": True,
     },
     "shockwave_t2": {
-        "hp": 50, "speed": 30, "radius": 5,
+        "hp": 50, "speed": 30, "radius": 6,
         "symbol": SHOCKWAVE_SYMBOL, "can_attack": True,
         "fov": 360, "turn_rate": 180, "los": 100,
         "weapon": {
@@ -191,7 +191,7 @@ UNIT_TYPES = {
         "is_t2": True,
     },
     "artillery_t2": {
-        "hp": 120, "speed": 15, "radius": 10,
+        "hp": 120, "speed": 15, "radius": 9,
         "symbol": ARTILLERY_SYMBOL, "can_attack": True,
         "fov": 15, "turn_rate": 45, "los": 250,
         "weapon": {

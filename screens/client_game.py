@@ -23,6 +23,8 @@ from config.settings import (
     EDGE_PAN_MARGIN, EDGE_PAN_SPEED,
     GUI_BORDER, GUI_BTN_SELECTED, GUI_BTN_HOVER, GUI_BTN_NORMAL,
     GUI_TEXT_COLOR,
+    RANGE_COLOR, MEDIC_HEAL_COLOR, CC_LASER_RANGE,
+    REACTIVE_ARMOR_COLOR, ELECTRIC_ARMOR_COLOR,
 )
 from core.camera import Camera
 from config.unit_types import UNIT_TYPES, get_spawnable_types
@@ -32,6 +34,11 @@ from gui_adapter import wrap_entities
 
 _STATUS_COLOR = (180, 180, 200)
 _DISCONNECT_COLOR = (255, 100, 100)
+
+# Command arrow colours/sizes (matching replay_playback.py)
+_MOVE_CMD_COLOR = (0, 140, 40)
+_ATTACK_CMD_COLOR = (180, 30, 30)
+_ARROW_SIZE = 6
 
 # HUD constants (matching gui.py style)
 _SECTION_BG = (22, 22, 30)
@@ -203,6 +210,13 @@ class ClientGameScreen(BaseScreen):
         return out
 
     def run(self) -> ScreenResult:
+        pygame.event.set_grab(True)
+        try:
+            return self._run_loop()
+        finally:
+            pygame.event.set_grab(False)
+
+    def _run_loop(self) -> ScreenResult:
         while True:
             dt = self.clock.tick(60) / 1000.0
             self._anim_timer += dt
@@ -259,26 +273,14 @@ class ClientGameScreen(BaseScreen):
                 # Pause toggle (spacebar for local games)
                 if (event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE
                         and self._is_local):
-                    self._paused = not self._paused
-                    self._client.send_command(GameCommand(
-                        type="set_pause",
-                        player_id=self._my_team,
-                        tick=self._tick,
-                        data={"paused": self._paused},
-                    ))
+                    self._toggle_pause()
 
                 # Header bar interactions (local controls)
                 if (event.type == pygame.MOUSEBUTTONDOWN and event.button == 1
                         and self._is_local and self._header_rect.collidepoint(event.pos)):
                     mx_h, my_h = event.pos
                     if self._pause_btn and self._pause_btn.rect.collidepoint(mx_h, my_h):
-                        self._paused = not self._paused
-                        self._client.send_command(GameCommand(
-                            type="set_pause",
-                            player_id=self._my_team,
-                            tick=self._tick,
-                            data={"paused": self._paused},
-                        ))
+                        self._toggle_pause()
                     elif self._reset_cam_btn and self._reset_cam_btn.rect.collidepoint(mx_h, my_h):
                         self._camera.reset()
 
@@ -322,6 +324,8 @@ class ClientGameScreen(BaseScreen):
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     if self._hud_rect.collidepoint(event.pos):
                         self._handle_hud_click(event.pos)
+                        # Check if a unit in the group grid was clicked
+                        self._handle_display_click(event.pos)
                         continue
                     if self._game_area.collidepoint(event.pos):
                         self._dragging = True
@@ -359,21 +363,19 @@ class ClientGameScreen(BaseScreen):
                     self._send_move_commands()
                     self._rpath = []
 
-            # Edge panning
+            # Edge panning (use screen edges, not game area edges)
             mx, my = pygame.mouse.get_pos()
-            ga = self._game_area
-            if ga.collidepoint(mx, my):
-                dx = dy = 0.0
-                if mx <= ga.left + EDGE_PAN_MARGIN:
-                    dx = EDGE_PAN_SPEED * dt
-                elif mx >= ga.right - EDGE_PAN_MARGIN - 1:
-                    dx = -EDGE_PAN_SPEED * dt
-                if my <= ga.top + EDGE_PAN_MARGIN:
-                    dy = EDGE_PAN_SPEED * dt
-                elif my >= ga.bottom - EDGE_PAN_MARGIN - 1:
-                    dy = -EDGE_PAN_SPEED * dt
-                if dx or dy:
-                    self._camera.pan(dx, dy)
+            dx = dy = 0.0
+            if mx <= EDGE_PAN_MARGIN:
+                dx = EDGE_PAN_SPEED * dt
+            elif mx >= self.width - EDGE_PAN_MARGIN - 1:
+                dx = -EDGE_PAN_SPEED * dt
+            if my <= EDGE_PAN_MARGIN:
+                dy = EDGE_PAN_SPEED * dt
+            elif my >= self.height - EDGE_PAN_MARGIN - 1:
+                dy = -EDGE_PAN_SPEED * dt
+            if dx or dy:
+                self._camera.pan(dx, dy)
 
             self._draw()
 
@@ -427,14 +429,15 @@ class ClientGameScreen(BaseScreen):
                             if eid is not None:
                                 self._selected_ids.add(eid)
         else:
-            # Circle select
+            # Circle select (center = drag start, radius = distance to release)
+            # Army units take priority over buildings
             if not additive:
                 self._selected_ids.clear()
-            w_sx, w_sy = self._screen_to_world(self._drag_start)
+            ccx, ccy = self._screen_to_world(self._drag_start)
             w_ex, w_ey = self._screen_to_world(pos)
-            ccx = (w_sx + w_ex) / 2.0
-            ccy = (w_sy + w_ey) / 2.0
-            sr = math.hypot(w_ex - w_sx, w_ey - w_sy) / 2.0
+            sr = math.hypot(w_ex - ccx, w_ey - ccy)
+            army_ids: list[int] = []
+            building_ids: list[int] = []
             for ent in self._entities:
                 if ent.get("tm") != self._my_team:
                     continue
@@ -445,7 +448,13 @@ class ClientGameScreen(BaseScreen):
                 if math.hypot(ex - ccx, ey - ccy) <= sr:
                     eid = ent.get("id")
                     if eid is not None:
-                        self._selected_ids.add(eid)
+                        if t == "U":
+                            army_ids.append(eid)
+                        else:
+                            building_ids.append(eid)
+            targets = army_ids if army_ids else building_ids
+            for eid in targets:
+                self._selected_ids.add(eid)
 
     # -- HUD interaction ----------------------------------------------------
 
@@ -613,6 +622,32 @@ class ClientGameScreen(BaseScreen):
             },
         })
 
+    # -- display click (group grid → center camera) --------------------------
+
+    def _handle_display_click(self, pos: tuple[int, int]) -> None:
+        """If a unit box in the group grid was clicked, select only that unit."""
+        proxies = wrap_entities(self._entities, self._selected_ids)
+        mx, my = pos
+        unit = gui.handle_display_click(
+            proxies, mx, my,
+            self.width, self.height, self._hud_h,
+        )
+        if unit is not None:
+            self._selected_ids.clear()
+            self._selected_ids.add(unit.entity_id)
+
+    # -- pause / mouse grab -------------------------------------------------
+
+    def _toggle_pause(self):
+        self._paused = not self._paused
+        pygame.event.set_grab(not self._paused)
+        self._client.send_command(GameCommand(
+            type="set_pause",
+            player_id=self._my_team,
+            tick=self._tick,
+            data={"paused": self._paused},
+        ))
+
     # -- sound effects ------------------------------------------------------
 
     def _play_laser_sounds(self) -> None:
@@ -770,7 +805,7 @@ class ClientGameScreen(BaseScreen):
         if is_warp_in:
             self._render_warp_in(ws)
 
-        # Selection rings
+        # Selection rings + FOV arcs
         for ent in entities:
             eid = ent.get("id")
             if eid in self._selected_ids:
@@ -779,6 +814,7 @@ class ClientGameScreen(BaseScreen):
                 ey = ent.get("y", 0)
                 r = CC_RADIUS + 2 if t == "CC" else ent.get("r", 5) + 2
                 pygame.draw.circle(ws, SELECTED_COLOR, (int(ex), int(ey)), int(r), 1)
+                self._draw_fov_arc(ent)
 
         # Lasers
         for lf in self._lasers:
@@ -815,37 +851,28 @@ class ClientGameScreen(BaseScreen):
                                    (int(sx), int(sy)), cur_r, 2)
                 ws.blit(temp, (0, 0))
 
-        # CC bonus labels
+        # ME spawn bonus labels (white, above extractor — matching game.py)
         for ent in entities:
-            if ent.get("t") == "CC":
-                bp = ent.get("bp", 0)
-                if bp > 0:
-                    label = _get_font(16).render(f"+{bp}%", True, (200, 200, 60))
-                    lx = int(ent.get("x", 0)) - label.get_width() // 2
-                    ly = int(ent.get("y", 0)) + CC_RADIUS + 8
-                    ws.blit(label, (lx, ly))
-            elif ent.get("t") == "ME":
+            if ent.get("t") == "ME":
                 meb = ent.get("meb", 0)
                 if meb > 0:
-                    label = _get_font(14).render(f"+{meb}%", True, (200, 200, 60))
+                    label = _get_font(14).render(f"+{meb}%", True, (255, 255, 255))
                     lx = int(ent.get("x", 0)) - label.get_width() // 2
-                    ly = int(ent.get("y", 0)) + int(ent.get("r", 10)) + 6
+                    ly = int(ent.get("y", 0)) - int(ent.get("r", 10)) - HEALTH_BAR_OFFSET - 12
                     ws.blit(label, (lx, ly))
 
         # Team labels
         self._draw_team_labels(entities)
 
-        # Drag selection circle
+        # Drag selection circle (center = drag start, radius = distance to cursor)
         if self._dragging:
             sx, sy = self._drag_start
             ex, ey = self._drag_end
-            screen_r = math.hypot(ex - sx, ey - sy) / 2.0
+            screen_r = math.hypot(ex - sx, ey - sy)
             if screen_r >= 5:
-                w_sx, w_sy = self._screen_to_world(self._drag_start)
+                wcx, wcy = self._screen_to_world(self._drag_start)
                 w_ex, w_ey = self._screen_to_world(self._drag_end)
-                wcx = (w_sx + w_ex) / 2.0
-                wcy = (w_sy + w_ey) / 2.0
-                wr = math.hypot(w_ex - w_sx, w_ey - w_sy) / 2.0
+                wr = math.hypot(w_ex - wcx, w_ey - wcy)
                 self._selection_surface.fill((0, 0, 0, 0))
                 pygame.draw.circle(self._selection_surface, SELECTION_FILL_COLOR,
                                    (int(wcx), int(wcy)), int(wr))
@@ -971,6 +998,79 @@ class ClientGameScreen(BaseScreen):
 
     # -- entity drawing (adapted from ReplayPlaybackScreen) -----------------
 
+    def _draw_command_line(self, x1: float, y1: float, x2: float, y2: float,
+                           color: tuple) -> None:
+        """Draw a command line with arrowhead from (x1,y1) to (x2,y2)."""
+        ws = self._world_surface
+        pygame.draw.line(ws, color, (x1, y1), (x2, y2), 1)
+        dx = x2 - x1
+        dy = y2 - y1
+        dist = math.hypot(dx, dy)
+        if dist < 1:
+            return
+        ux, uy = dx / dist, dy / dist
+        px, py = -uy, ux
+        s = _ARROW_SIZE
+        wing1 = (x2 - ux * s + px * s * 0.5, y2 - uy * s + py * s * 0.5)
+        wing2 = (x2 - ux * s - px * s * 0.5, y2 - uy * s - py * s * 0.5)
+        pygame.draw.polygon(ws, color, [(x2, y2), wing1, wing2])
+
+    def _draw_fov_arc(self, ent: dict) -> None:
+        """Draw FOV/range arc for a selected unit."""
+        t = ent.get("t")
+        ut = ent.get("ut", "soldier")
+        stats = UNIT_TYPES.get(ut, {})
+        fov_deg = stats.get("fov", 90)
+        fov = math.radians(fov_deg)
+
+        ws = self._world_surface
+        ex = ent.get("x", 0)
+        ey = ent.get("y", 0)
+
+        # CC: show attack range circle
+        if t == "CC":
+            atk_r = int(CC_LASER_RANGE)
+            temp = pygame.Surface((atk_r * 2, atk_r * 2), pygame.SRCALPHA)
+            pygame.draw.circle(temp, RANGE_COLOR, (atk_r, atk_r), atk_r, 1)
+            ws.blit(temp, (int(ex) - atk_r, int(ey) - atk_r))
+            return
+
+        if t == "ME":
+            return
+
+        weapon = stats.get("weapon")
+        if not weapon:
+            return
+        r = int(weapon.get("range", 50))
+        if r <= 0:
+            return
+        is_healer = weapon.get("hits_only_friendly", False)
+        color = MEDIC_HEAL_COLOR if is_healer else RANGE_COLOR
+        fa = ent.get("fa", 0.0)
+
+        half_fov = fov / 2.0
+        if fov >= math.tau - 0.01:
+            temp = pygame.Surface((r * 2, r * 2), pygame.SRCALPHA)
+            pygame.draw.circle(temp, color, (r, r), r, 1)
+            ws.blit(temp, (int(ex) - r, int(ey) - r))
+            return
+
+        start = fa - half_fov
+        steps = max(int(math.degrees(fov) / 3), 8)
+        points = [(ex, ey)]
+        for i in range(steps + 1):
+            a = start + fov * i / steps
+            points.append((ex + r * math.cos(a), ey + r * math.sin(a)))
+        points.append((ex, ey))
+
+        temp_size = r * 2 + 4
+        temp = pygame.Surface((temp_size, temp_size), pygame.SRCALPHA)
+        ox = temp_size // 2 - ex
+        oy = temp_size // 2 - ey
+        shifted = [(px + ox, py + oy) for px, py in points]
+        pygame.draw.lines(temp, color, False, shifted, 1)
+        ws.blit(temp, (ex - temp_size // 2, ey - temp_size // 2))
+
     def _draw_unit(self, ent: dict) -> None:
         ws = self._world_surface
         x, y = ent.get("x", 0), ent.get("y", 0)
@@ -978,6 +1078,14 @@ class ClientGameScreen(BaseScreen):
         r = ent.get("r", 5)
         hp = ent.get("hp", 100)
         ut = ent.get("ut", "soldier")
+
+        # Command arrows for selected units
+        eid = ent.get("id")
+        if eid in self._selected_ids:
+            if "atx" in ent and "aty" in ent:
+                self._draw_command_line(x, y, ent["atx"], ent["aty"], _ATTACK_CMD_COLOR)
+            elif "tx" in ent and "ty" in ent:
+                self._draw_command_line(x, y, ent["tx"], ent["ty"], _MOVE_CMD_COLOR)
 
         pygame.draw.circle(ws, c, (x, y), r)
 
@@ -989,9 +1097,41 @@ class ClientGameScreen(BaseScreen):
             pygame.draw.polygon(ws, (0, 0, 0), translated)
             pygame.draw.polygon(ws, c, translated, 1)
 
-        max_hp = stats.get("hp", 100)
+        max_hp = ent.get("mhp", stats.get("hp", 100))
         if hp < max_hp:
             self._draw_health_bar(x, y, r + HEALTH_BAR_OFFSET, hp, max_hp)
+
+        # Ability indicators above unit
+        _ABILITY_COLORS = {
+            "reactive_armor": REACTIVE_ARMOR_COLOR,
+            "electric_armor": ELECTRIC_ARMOR_COLOR,
+        }
+        for ab in ent.get("abs", []):
+            ab_name = ab.get("n", "")
+            # Stack-based abilities: diamond indicators
+            stacks = ab.get("s", 0)
+            if stacks > 0 and ab_name in _ABILITY_COLORS:
+                color = _ABILITY_COLORS[ab_name]
+                size = 2 if ab_name == "electric_armor" else 3
+                spacing = 5 if ab_name == "electric_armor" else 6
+                y_off = r + 6
+                start_x = x - (stacks - 1) * spacing / 2
+                for i in range(stacks):
+                    cx = start_x + i * spacing
+                    cy = y - y_off
+                    pts = [
+                        (cx, cy - size),
+                        (cx + size, cy),
+                        (cx, cy + size),
+                        (cx - size, cy),
+                    ]
+                    pygame.draw.polygon(ws, color, pts)
+            # Combat stim: green chevron when active
+            elif ab_name == "combat_stim" and ab.get("a", False):
+                cy = y - r - 6
+                size = 3
+                pts = [(x - size, cy + size), (x, cy - size), (x + size, cy + size)]
+                pygame.draw.lines(ws, (100, 255, 100), False, pts, 2)
 
     def _draw_command_center(self, ent: dict) -> None:
         ws = self._world_surface
@@ -1006,6 +1146,27 @@ class ClientGameScreen(BaseScreen):
             pygame.draw.polygon(ws, c, translated)
             outline = (150, 220, 255) if tm == 1 else (255, 140, 140)
             pygame.draw.polygon(ws, outline, translated, 2)
+
+        # Spawn progress arc
+        spt = ent.get("spt", 0.0)
+        arc_r = CC_RADIUS + 5
+        if spt < 1.0:
+            start_angle = math.pi / 2
+            end_angle = start_angle + spt * math.tau
+            rect = pygame.Rect(x - arc_r, y - arc_r, arc_r * 2, arc_r * 2)
+            pygame.draw.arc(ws, SELECTED_COLOR, rect, start_angle, end_angle, 2)
+        else:
+            pygame.draw.circle(ws, SELECTED_COLOR, (int(x), int(y)), int(arc_r), 2)
+
+        # Rally point line + flag (only when selected)
+        rx = ent.get("rx")
+        if rx is not None and ent.get("id") in self._selected_ids:
+            ry = ent.get("ry", 0)
+            pygame.draw.line(ws, c, (x, y), (rx, ry), 1)
+            pygame.draw.line(ws, (200, 200, 200), (rx, ry), (rx, ry - 14), 1)
+            flag_pts = [(rx, ry - 14), (rx + 8, ry - 10), (rx, ry - 6)]
+            pygame.draw.polygon(ws, c, flag_pts)
+            pygame.draw.circle(ws, c, (int(rx), int(ry)), 3, 1)
 
         if hp < CC_HP:
             self._draw_health_bar(x, y, CC_RADIUS + HEALTH_BAR_OFFSET,
@@ -1053,6 +1214,7 @@ class ClientGameScreen(BaseScreen):
         r = ent.get("r", METAL_EXTRACTOR_RADIUS)
         rot = ent.get("rot", 0.0)
         hp = ent.get("hp", 200)
+        tm = ent.get("tm", 1)
 
         s = r * math.sqrt(3) / 2
         static_points = [
@@ -1064,9 +1226,30 @@ class ClientGameScreen(BaseScreen):
         points = [(p.real + x, p.imag + y) for p in rotated]
         pygame.draw.polygon(ws, (0, 0, 0), points, 1)
 
-        if hp < METAL_EXTRACTOR_HP:
+        # Reinforcement plating arcs
+        rst = ent.get("rst", 0)
+        if rst > 0:
+            arc_color = TEAM_COLORS.get(tm, TEAM1_COLOR)
+            arc_r = METAL_SPOT_CAPTURE_RADIUS
+            rect = pygame.Rect(x - arc_r, y - arc_r, arc_r * 2, arc_r * 2)
+            arc_span = math.radians(87.5)
+            half_span = arc_span / 2
+            cardinal_angles = [
+                math.radians(90),    # N
+                math.radians(0),     # E
+                math.radians(270),   # S
+                math.radians(180),   # W
+            ]
+            for i in range(min(rst, 4)):
+                center = cardinal_angles[i]
+                start = center - half_span
+                end = center + half_span
+                pygame.draw.arc(ws, arc_color, rect, start, end, 2)
+
+        max_hp = ent.get("mhp", METAL_EXTRACTOR_HP)
+        if hp < max_hp:
             self._draw_health_bar(x, y, r + HEALTH_BAR_OFFSET,
-                                  hp, METAL_EXTRACTOR_HP)
+                                  hp, max_hp)
 
     def _draw_laser(self, lf: list) -> None:
         if len(lf) < 6:
@@ -1114,6 +1297,10 @@ class ClientGameScreen(BaseScreen):
                 continue
             tm = ent.get("tm", 1)
             name = names.get(tm, f"Team {tm}")
+            # Append bonus % to name (matching game.py)
+            bp = ent.get("bp", 0)
+            if bp > 0:
+                name = f"{name} (+{bp}%)"
             team_color = TEAM1_COLOR if tm == 1 else TEAM2_COLOR
             name_surf = font.render(name, True, team_color)
             nx = int(ent.get("x", 0)) - name_surf.get_width() // 2

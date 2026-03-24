@@ -24,8 +24,10 @@ class BaseMapGenerator:
 class DefaultMapGenerator(BaseMapGenerator):
     """Random obstacles in the center band, one command center per side."""
 
-    def __init__(self, obstacle_count: tuple[int, int] = (4, 8)):
+    def __init__(self, obstacle_count: tuple[int, int] = (4, 8),
+                 metal_spots_per_side: int = 0):
         self._obs_range = obstacle_count
+        self._metal_spots_per_side = metal_spots_per_side
 
     def generate(self, width: int, height: int, player_team: dict | None = None) -> list[Entity]:
         entities: list[Entity] = []
@@ -121,7 +123,8 @@ class DefaultMapGenerator(BaseMapGenerator):
                 entities.append(cc)
 
     def _place_metal_spots(self, entities: list[Entity], width: int, height: int):
-        for _ in range(random.randint(2, 4)):
+        count = self._metal_spots_per_side if self._metal_spots_per_side > 0 else random.randint(2, 4)
+        for _ in range(count):
             x = random.uniform(200 + METAL_SPOT_RADIUS, width // 2 - METAL_SPOT_RADIUS)
             y = random.uniform(60 + METAL_SPOT_RADIUS, height // 2 - METAL_SPOT_RADIUS)
             metal_spot = MetalSpot(x, y)

@@ -205,7 +205,7 @@ class Focus(PassiveAbility):
 
 class ElectricArmor(PassiveAbility):
     name = "electric_armor"
-    description = "Gains a stack every second (max 8). Each stack: 60% damage reduction, +1 HP/s regen, +20% speed. Loses one stack when hit."
+    description = "Gains a stack every second (max 8). While stacks > 0: 60% damage reduction. Each stack: +1 HP/s regen, +20% speed. Loses one stack when hit."
 
     def __init__(self):
         super().__init__()
@@ -238,7 +238,8 @@ class ElectricArmor(PassiveAbility):
     def modify_damage(self, amount: float, entity) -> float:
         if self.stacks <= 0:
             return amount
-        reduction = min(self.stacks * ELECTRIC_ARMOR_REDUCTION, 1.0)
+        # Flat 60% reduction as long as stacks > 0 (does not scale with stack count)
+        reduction = ELECTRIC_ARMOR_REDUCTION
         self.stacks -= 1
         self.stack_timer = 0.0
         return amount * (1.0 - reduction)
@@ -281,11 +282,71 @@ class ElectricArmor(PassiveAbility):
         return obj
 
 
+class CombatStim(PassiveAbility):
+    """For every 10 missing HP, gain -0.1 weapon cooldown and +5% movement speed."""
+    name = "combat_stim"
+    description = "For every 10 missing HP: -0.1s cooldown, +5% speed."
+
+    def __init__(self):
+        super().__init__()
+        self._base_speed: float = 0.0
+        self._base_cooldown: float = 0.0
+
+    def update(self, entity, dt: float) -> None:
+        # Capture base values on first update
+        if self._base_speed == 0.0 and entity.speed > 0:
+            self._base_speed = entity.speed
+        if self._base_cooldown == 0.0:
+            self._base_cooldown = entity.attack_cooldown_max
+
+        missing = max(0.0, entity.max_hp - entity.hp)
+        stacks = int(missing / 10.0)
+
+        if stacks > 0:
+            self.active = True
+            # Speed bonus: +5% per stack
+            entity.speed = self._base_speed * (1.0 + 0.05 * stacks)
+            # Cooldown reduction: -0.1s per stack (min 0.1s)
+            if self._base_cooldown > 0:
+                entity.attack_cooldown_max = max(0.1, self._base_cooldown - 0.1 * stacks)
+        else:
+            self.active = False
+            if self._base_speed > 0:
+                entity.speed = self._base_speed
+            if self._base_cooldown > 0:
+                entity.attack_cooldown_max = self._base_cooldown
+
+    def draw(self, entity, surface: pygame.Surface) -> None:
+        if not self.active:
+            return
+        # Draw a small upward chevron above the unit (green-ish)
+        cx = entity.x
+        cy = entity.y - entity.radius - 6
+        size = 3
+        pts = [(cx - size, cy + size), (cx, cy - size), (cx + size, cy + size)]
+        pygame.draw.lines(surface, (100, 255, 100), False, pts, 2)
+
+    def to_dict(self) -> dict:
+        d = super().to_dict()
+        d["_base_speed"] = self._base_speed
+        d["_base_cooldown"] = self._base_cooldown
+        return d
+
+    @classmethod
+    def from_dict(cls, data: dict) -> CombatStim:
+        obj = cls()
+        obj.active = data.get("active", False)
+        obj._base_speed = data.get("_base_speed", 0.0)
+        obj._base_cooldown = data.get("_base_cooldown", 0.0)
+        return obj
+
+
 ABILITY_REGISTRY: dict[str, type[PassiveAbility]] = {
     "reinforce": Reinforce,
     "reactive_armor": ReactiveArmor,
     "focus": Focus,
     "electric_armor": ElectricArmor,
+    "combat_stim": CombatStim,
 }
 
 

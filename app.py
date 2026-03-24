@@ -146,6 +146,7 @@ class App:
         width = data.get("width", 800)
         height = data.get("height", 600)
         obs = data.get("obstacle_count", (4, 8))
+        metal_spots: int = data.get("metal_spots", 0)
         player_name: str = data.get("player_name", "Unnamed Player")
         enable_t2: bool = data.get("enable_t2", False)
         time_limit: int = data.get("time_limit", 0)  # minutes, 0 = no limit
@@ -185,7 +186,8 @@ class App:
         server = InternalServer(
             width=width,
             height=height,
-            map_generator=DefaultMapGenerator(obstacle_count=obs),
+            map_generator=DefaultMapGenerator(obstacle_count=obs,
+                                                metal_spots_per_side=metal_spots),
             player_ai=player_ai,
             player_team=player_team,
             replay_config=replay_config,

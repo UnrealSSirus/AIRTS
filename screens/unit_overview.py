@@ -8,8 +8,8 @@ from ui.theme import (
     CONTENT_TEXT, CONTENT_HEADING, CONTENT_FONT_SIZE, HEADING_FONT_SIZE,
     TG_ACTIVE, TG_INACTIVE, TG_BORDER,
 )
-from ui.widgets import BackButton
-from config.unit_types import UNIT_TYPES
+from ui.widgets import BackButton, Button
+from config.unit_types import UNIT_TYPES, get_spawnable_types, get_t2_name, get_t2_type
 from config.settings import (
     TEAM1_COLOR, TEAM1_SELECTED_COLOR,
     CC_LASER_DAMAGE, CC_LASER_RANGE, CC_LASER_COOLDOWN, CC_RADIUS,
@@ -18,6 +18,8 @@ from config.settings import (
     REINFORCE_HP_BONUS, REINFORCE_MAX_STACKS, REINFORCE_STACK_INTERVAL,
     REINFORCE_BONUS_MULTIPLIER,
     REACTIVE_ARMOR_INTERVAL, REACTIVE_ARMOR_MAX_STACKS, REACTIVE_ARMOR_REDUCTION,
+    ELECTRIC_ARMOR_INTERVAL, ELECTRIC_ARMOR_MAX_STACKS, ELECTRIC_ARMOR_REDUCTION,
+    ELECTRIC_ARMOR_REGEN_PER_STACK, ELECTRIC_ARMOR_SPEED_BONUS,
 )
 from core.helpers import hexagon_points
 
@@ -49,6 +51,7 @@ _PASSIVES: dict[str, list[dict[str, str]]] = {
         {"name": "Chain Lightning",
          "desc": "Laser chains to nearby enemies within 70px after a 0.2s delay."},
     ],
+    "artillery": [],
     "command_center": [
         {"name": "Unit Production",
          "desc": (f"Spawns a unit every {CC_SPAWN_INTERVAL:.0f}s. "
@@ -64,7 +67,44 @@ _PASSIVES: dict[str, list[dict[str, str]]] = {
                   f"+{REINFORCE_HP_BONUS} HP and "
                   f"{REINFORCE_BONUS_MULTIPLIER}x spawn bonus.")},
     ],
+    # -- T2 passives --
+    "soldier_t2": [
+        {"name": "Combat Stim",
+         "desc": "For every 10 missing HP: -0.1s weapon cooldown and +5% movement speed."},
+    ],
+    "medic_t2": [
+        {"name": "Heal Beam",
+         "desc": "Heals friendly units instead of dealing damage."},
+    ],
+    "tank_t2": [
+        {"name": "Electric Armor",
+         "desc": (f"Gains a stack every {ELECTRIC_ARMOR_INTERVAL:.0f}s "
+                  f"(max {ELECTRIC_ARMOR_MAX_STACKS}). If any stacks are active, gain "
+                  f"{ELECTRIC_ARMOR_REDUCTION * 100:.0f}% damage reduction. "
+                  f"Each stack: +{ELECTRIC_ARMOR_REGEN_PER_STACK:.2f} HP/s regen, "
+                  f"+{ELECTRIC_ARMOR_SPEED_BONUS * 100:.0f}% speed. "
+                  "Loses one stack when hit.")},
+    ],
+    "sniper_t2": [
+        {"name": "Focus",
+         "desc": "After firing, speed drops to 25% and gradually recovers over 3s."},
+    ],
+    "machine_gunner_t2": [],
+    "scout_t2": [
+        {"name": "Swarm",
+         "desc": "Spawns in groups of 6."},
+    ],
+    "shockwave_t2": [
+        {"name": "Arc Lightning",
+         "desc": "Laser chains to nearby enemies within 50px after a 0.15s delay."},
+    ],
+    "artillery_t2": [],
 }
+
+# Stat diff colors
+_DIFF_BETTER = (100, 255, 100)
+_DIFF_WORSE = (255, 100, 100)
+_DIFF_NEUTRAL = (200, 200, 200)
 
 
 class UnitOverviewScreen(BaseScreen):
@@ -72,9 +112,16 @@ class UnitOverviewScreen(BaseScreen):
 
     def __init__(self, screen: pygame.Surface, clock: pygame.time.Clock):
         super().__init__(screen, clock)
-        self._types = list(UNIT_TYPES.keys())
+        # Sidebar: only T1 spawnable + buildings
+        spawnable = list(get_spawnable_types().keys())
+        buildings = [k for k, v in UNIT_TYPES.items() if v.get("is_building", False)]
+        self._types = spawnable + buildings
         self._selected = 0
+        self._show_t2 = False
         self._back = BackButton()
+
+        # T2 toggle button
+        self._t2_btn = Button(0, 0, 100, 28, "Show T2", font_size=18)
 
     def run(self) -> ScreenResult:
         while True:
@@ -90,6 +137,10 @@ class UnitOverviewScreen(BaseScreen):
                                         SIDEBAR_WIDTH, SIDEBAR_BTN_HEIGHT)
                         if r.collidepoint(event.pos):
                             self._selected = i
+                            self._show_t2 = False
+
+                if self._t2_btn.handle_event(event):
+                    self._show_t2 = not self._show_t2
 
             self._draw()
             self.clock.tick(60)
@@ -123,15 +174,35 @@ class UnitOverviewScreen(BaseScreen):
         self._back.draw(self.screen)
 
         # Content area
-        utype = self._types[self._selected]
+        base_type = self._types[self._selected]
+        t2_key = get_t2_type(base_type)
+        has_t2 = t2_key in UNIT_TYPES
+
+        if self._show_t2 and has_t2:
+            utype = t2_key
+        else:
+            utype = base_type
+
         stats = UNIT_TYPES[utype]
         content_x = SIDEBAR_WIDTH + 30
         content_w = self.width - SIDEBAR_WIDTH - 60
 
         # Heading
         font_h = pygame.font.SysFont(None, HEADING_FONT_SIZE)
-        heading = font_h.render(utype.replace("_", " ").title(), True, CONTENT_HEADING)
+        if self._show_t2 and has_t2:
+            heading_text = get_t2_name(base_type)
+        else:
+            heading_text = utype.replace("_", " ").title()
+        heading = font_h.render(heading_text, True, CONTENT_HEADING)
         self.screen.blit(heading, (content_x, 20))
+
+        # T2 toggle button (only for units that have T2 variants)
+        if has_t2:
+            self._t2_btn.rect.x = content_x + heading.get_width() + 15
+            self._t2_btn.rect.y = 22
+            btn_label = "Show T1" if self._show_t2 else "Show T2"
+            self._t2_btn.label = btn_label
+            self._t2_btn.draw(self.screen)
 
         # Unit symbol + FOV arc
         sym_cx = content_x + content_w // 2
@@ -140,8 +211,10 @@ class UnitOverviewScreen(BaseScreen):
         self._draw_unit_symbol(utype, stats, sym_cx, sym_cy, scale)
         self._draw_fov_preview(stats, utype, sym_cx, sym_cy)
 
-        # Stats table
-        table_bottom = self._draw_stats(stats, utype, content_x, content_w, 195)
+        # Stats table (with diffs when showing T2)
+        t1_stats = UNIT_TYPES.get(base_type) if self._show_t2 and has_t2 else None
+        table_bottom = self._draw_stats(stats, utype, content_x, content_w, 195,
+                                        t1_stats=t1_stats)
 
         # Passive abilities
         passives = _PASSIVES.get(utype, [])
@@ -216,20 +289,36 @@ class UnitOverviewScreen(BaseScreen):
                                      int(cy) - temp_size // 2))
 
     def _draw_stats(self, stats: dict, utype: str,
-                    content_x: int, content_w: int, y_start: int) -> int:
-        """Draw the stats table. Returns y after last row."""
+                    content_x: int, content_w: int, y_start: int,
+                    t1_stats: dict | None = None) -> int:
+        """Draw the stats table. When t1_stats is provided, show diffs. Returns y after last row."""
         font_c = pygame.font.SysFont(None, CONTENT_FONT_SIZE)
         row_h = 24
 
-        stat_rows: list[tuple[str, str]] = [
-            ("HP", str(stats["hp"])),
-            ("Speed", str(stats["speed"])),
-            ("Radius", str(stats["radius"])),
-            ("FOV", f"{stats.get('fov', 90)}\u00b0"),
-        ]
+        stat_rows: list[tuple[str, str, str]] = []  # (label, value, diff_text)
 
-        # Weapon stats — CC has its weapon defined in settings, not in UNIT_TYPES
+        def _add(label: str, val, t1_val=None, higher_is_better: bool = True):
+            val_str = str(val)
+            diff = ""
+            if t1_stats is not None and t1_val is not None and val != t1_val:
+                d = val - t1_val if isinstance(val, (int, float)) else 0
+                if d != 0:
+                    sign = "+" if d > 0 else ""
+                    if isinstance(d, float):
+                        diff = f" ({sign}{d:.1f})"
+                    else:
+                        diff = f" ({sign}{d})"
+            stat_rows.append((label, val_str, diff))
+
+        t1 = t1_stats or {}
+        _add("HP", stats["hp"], t1.get("hp"))
+        _add("Speed", stats["speed"], t1.get("speed"))
+        _add("Radius", stats["radius"], t1.get("radius"))
+        _add("FOV", f"{stats.get('fov', 90)}\u00b0")
+
+        # Weapon stats
         wpn = stats.get("weapon")
+        t1_wpn = t1.get("weapon") if t1 else None
         if utype == "command_center":
             wpn = {
                 "damage": CC_LASER_DAMAGE,
@@ -239,27 +328,54 @@ class UnitOverviewScreen(BaseScreen):
 
         if wpn:
             dmg = wpn["damage"]
+            t1_dmg = t1_wpn["damage"] if t1_wpn else None
             if dmg < 0:
-                stat_rows.append(("Heal/pulse", str(abs(dmg))))
+                _add("Heal/pulse", abs(dmg), abs(t1_dmg) if t1_dmg is not None else None)
             else:
-                stat_rows.append(("Damage", str(dmg)))
-            stat_rows.append(("Range", str(wpn["range"])))
-            stat_rows.append(("Cooldown", f"{wpn['cooldown']}s"))
+                _add("Damage", dmg, t1_dmg)
+            _add("Range", wpn["range"], t1_wpn["range"] if t1_wpn else None)
 
             cd = wpn["cooldown"]
+            t1_cd = t1_wpn["cooldown"] if t1_wpn else None
+            cd_str = f"{cd}s"
+            diff = ""
+            if t1_cd is not None and cd != t1_cd:
+                d = cd - t1_cd
+                sign = "+" if d > 0 else ""
+                diff = f" ({sign}{d:.1f}s)"
+            stat_rows.append(("Cooldown", cd_str, diff))
+
             if cd > 0:
-                if dmg < 0:
-                    stat_rows.append(("HPS", f"{abs(dmg) / cd:.1f}"))
-                else:
-                    stat_rows.append(("DPS", f"{dmg / cd:.1f}"))
+                dps = abs(dmg) / cd
+                t1_dps = abs(t1_dmg) / t1_cd if t1_wpn and t1_cd and t1_cd > 0 and t1_dmg is not None else None
+                label = "HPS" if dmg < 0 else "DPS"
+                dps_str = f"{dps:.1f}"
+                diff = ""
+                if t1_dps is not None and abs(dps - t1_dps) > 0.05:
+                    d = dps - t1_dps
+                    sign = "+" if d > 0 else ""
+                    diff = f" ({sign}{d:.1f})"
+                stat_rows.append((label, dps_str, diff))
+
         elif not stats["can_attack"]:
-            stat_rows.append(("Can Attack", "No"))
+            stat_rows.append(("Can Attack", "No", ""))
 
         spawn_count = stats.get("spawn_count")
+        t1_spawn = t1.get("spawn_count") if t1 else None
         if spawn_count and spawn_count > 1:
-            stat_rows.append(("Spawn Count", str(spawn_count)))
+            diff = ""
+            if t1_spawn and spawn_count != t1_spawn:
+                d = spawn_count - t1_spawn
+                diff = f" ({'+' if d > 0 else ''}{d})"
+            stat_rows.append(("Spawn Count", str(spawn_count), diff))
 
-        for i, (label, value) in enumerate(stat_rows):
+        # Splash stats
+        if wpn and wpn.get("splash_radius", 0) > 0:
+            _add("Splash Radius", wpn["splash_radius"],
+                 t1_wpn.get("splash_radius") if t1_wpn else None)
+            _add("Splash Dmg", f"{wpn.get('splash_damage_max', 0)}-{wpn.get('splash_damage_min', 0)}")
+
+        for i, (label, value, diff) in enumerate(stat_rows):
             y = y_start + i * row_h
             if i % 2 == 0:
                 row_rect = pygame.Rect(content_x - 5, y - 2,
@@ -270,6 +386,23 @@ class UnitOverviewScreen(BaseScreen):
             val_surf = font_c.render(value, True, CONTENT_TEXT)
             self.screen.blit(lbl_surf, (content_x, y))
             self.screen.blit(val_surf, (content_x + 160, y))
+
+            if diff:
+                # Color based on sign
+                if "+" in diff and "-" not in diff:
+                    diff_color = _DIFF_BETTER
+                elif "-" in diff:
+                    diff_color = _DIFF_WORSE
+                else:
+                    diff_color = _DIFF_NEUTRAL
+                # Cooldown: lower is better, so flip colors
+                if label == "Cooldown":
+                    if diff_color == _DIFF_BETTER:
+                        diff_color = _DIFF_WORSE
+                    elif diff_color == _DIFF_WORSE:
+                        diff_color = _DIFF_BETTER
+                diff_surf = font_c.render(diff, True, diff_color)
+                self.screen.blit(diff_surf, (content_x + 160 + val_surf.get_width(), y))
 
         return y_start + len(stat_rows) * row_h
 

@@ -47,8 +47,21 @@ def _make_proxy(d: dict, selected_ids: set[int]) -> _EntityProxy:
         alive=True,
         facing_angle=d.get("fa", 0.0),
         is_t2=d.get("t2", False),
-        abilities=[],
+        abilities=[],  # populated below from "abs" field
     )
+
+    # Build ability proxies from serialized ability data
+    for ab in d.get("abs", []):
+        ab_proxy = SimpleNamespace(
+            name=ab.get("n", ""),
+            active=ab.get("a", False),
+        )
+        if "s" in ab:
+            ab_proxy.stacks = ab["s"]
+            ab_proxy.max_stacks = ab.get("ms", 0)
+        if "tm" in ab:
+            ab_proxy.timer = ab["tm"]
+        p.abilities.append(ab_proxy)
 
     # Weapon proxy
     wpn_data = UNIT_TYPES.get(ut, {}).get("weapon")

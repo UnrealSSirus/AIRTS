@@ -93,6 +93,8 @@ class _Slot:
     ai_dd: Dropdown
     team_dd: Dropdown
     remove_btn: Button
+    color_idx: int = 0
+    name_input: TextInput | None = None  # only for human players
 
 
 class CreateLobbyScreen(BaseScreen):
@@ -120,6 +122,8 @@ class CreateLobbyScreen(BaseScreen):
         self._ai_dd_x   = self._label_x + 44          # AI / Human dropdown
         self._team_dd_x = self._ai_dd_x + _AI_DD_W + 8
         self._remove_x  = self._team_dd_x + _TEAM_DD_W + 6
+        self._name_x    = self._remove_x + _REMOVE_BTN_W + 6  # inline name input
+        self._name_w    = max(80, (self._lp_x + self._lp_w - 10) - self._name_x)
 
         # Right panel content starts here
         self._rx = self._rp_x + 14
@@ -129,14 +133,6 @@ class CreateLobbyScreen(BaseScreen):
 
         self._slots: list[_Slot] = []
         self._load_slots(saved)
-
-        # Player name input (shown only when a Human slot exists)
-        self._name_input = TextInput(
-            self._ai_dd_x, 0, _AI_DD_W,
-            text=saved.get("player_name", ""),
-            placeholder="Unnamed Player",
-            max_len=24,
-        )
 
         # "+ Add Player" button
         self._add_btn = Button(self._label_x, 0, 150, 28, "+ Add Player",
@@ -157,23 +153,27 @@ class CreateLobbyScreen(BaseScreen):
             self._rx, ry + 72, min(self._rp_w - 20, 220),
             "Obstacles", 0, 20, saved.get("obstacles", 0), 1,
         )
-        self._sl_time_limit = Slider(
+        self._sl_metal_spots = Slider(
             self._rx, ry + 126, min(self._rp_w - 20, 220),
+            "Metal Spots / Side (0=random)", 0, 8, saved.get("metal_spots", 0), 1,
+        )
+        self._sl_time_limit = Slider(
+            self._rx, ry + 180, min(self._rp_w - 20, 220),
             "Time Limit (min, 0=off)", 0, 60, saved.get("time_limit", 15), 1,
         )
         self._debug_summary_cb = Checkbox(
-            self._rx, ry + 182,
+            self._rx, ry + 236,
             "Save game summary for debugging",
             checked=saved.get("save_debug_summary", False),
         )
         self._headless_cb = Checkbox(
-            self._rx, ry + 212,
+            self._rx, ry + 266,
             "Headless (no rendering, max speed)",
             checked=saved.get("headless", False),
             enabled=False,
         )
         self._t2_cb = Checkbox(
-            self._rx, ry + 242,
+            self._rx, ry + 296,
             "Enable T2 Units",
             checked=saved.get("enable_t2", False),
         )
@@ -203,7 +203,8 @@ class CreateLobbyScreen(BaseScreen):
     def _slot_y(self, idx: int) -> int:
         return _SLOT_Y_START + idx * _SLOT_ROW_H
 
-    def _make_slot(self, pid: int, ai_id: str, team_id: int, idx: int) -> _Slot:
+    def _make_slot(self, pid: int, ai_id: str, team_id: int, idx: int,
+                   color_idx: int = -1, name: str = "") -> _Slot:
         y = self._slot_y(idx)
         ai_idx = self._find_ai_index(ai_id, self._full_choices, 0)
         team_idx = 0 if team_id == 1 else 1
@@ -214,36 +215,37 @@ class CreateLobbyScreen(BaseScreen):
             y + (DD_HEIGHT - _REMOVE_BTN_W) // 2,
             _REMOVE_BTN_W, _REMOVE_BTN_W, "×",
         )
-        return _Slot(pid=pid, ai_dd=ai_dd, team_dd=team_dd, remove_btn=remove_btn)
+        cidx = color_idx if color_idx >= 0 else idx % len(_PLAYER_COLORS)
+        # Per-human name input (inline, same row after × button)
+        name_input = TextInput(
+            self._name_x, y, self._name_w,
+            text=name, placeholder="Name", max_len=24,
+        )
+        return _Slot(pid=pid, ai_dd=ai_dd, team_dd=team_dd,
+                     remove_btn=remove_btn, color_idx=cidx, name_input=name_input)
 
     def _rebuild_slot_positions(self):
         for idx, slot in enumerate(self._slots):
-            y = self._slot_y(idx)
+            y = _SLOT_Y_START + idx * _SLOT_ROW_H
             slot.ai_dd.x = self._ai_dd_x
             slot.ai_dd.y = y
             slot.team_dd.x = self._team_dd_x
             slot.team_dd.y = y
             slot.remove_btn.rect.x = self._remove_x
             slot.remove_btn.rect.y = y + (DD_HEIGHT - _REMOVE_BTN_W) // 2
+            # Inline name input (same row, after × button)
+            if slot.name_input:
+                slot.name_input.rect.x = self._name_x
+                slot.name_input.rect.y = y
 
         # Add button just below the last slot row
         n = len(self._slots)
-        self._add_btn.rect.y = self._slot_y(n) + 5
-        self._add_btn.rect.x = self._label_x
+        add_y = _SLOT_Y_START + n * _SLOT_ROW_H + 5
+        self._add_btn.rect.y = add_y
+        self._add_btn.rect.x = self._ai_dd_x
         self._add_btn.enabled = n < _MAX_SLOTS
 
-        self._update_name_input_pos()
-
-    def _update_name_input_pos(self):
-        n = len(self._slots)
-        below = self._slot_y(n) + 8
-        if n < _MAX_SLOTS:                    # add button is visible
-            below = max(below, self._slot_y(n) + 5 + 32)
-        self._name_input.rect.x = self._ai_dd_x
-        self._name_input.rect.y = below
-
         has_human = any(s.ai_dd.value == "human" for s in self._slots)
-        self._name_input.visible = has_human
         self._headless_cb.enabled = not has_human
         if has_human:
             self._headless_cb.checked = False
@@ -255,7 +257,10 @@ class CreateLobbyScreen(BaseScreen):
             for i, entry in enumerate(slot_data[:_MAX_SLOTS]):
                 ai_id  = entry.get("ai_id", first_ai)
                 team_id = int(entry.get("team", 1 if i == 0 else 2))
-                self._slots.append(self._make_slot(i + 1, ai_id, team_id, i))
+                color_idx = entry.get("color", i % len(_PLAYER_COLORS))
+                name = entry.get("name", "")
+                self._slots.append(self._make_slot(i + 1, ai_id, team_id, i,
+                                                   color_idx=color_idx, name=name))
         else:
             # Legacy fallback
             fmt = saved.get("format", "1v1")
@@ -274,12 +279,29 @@ class CreateLobbyScreen(BaseScreen):
                 self._slots.append(self._make_slot(1, p1, 1, 0))
                 self._slots.append(self._make_slot(2, p2, 2, 1))
 
+    def _next_free_color(self) -> int:
+        used = {s.color_idx for s in self._slots}
+        for i in range(len(_PLAYER_COLORS)):
+            if i not in used:
+                return i
+        return len(self._slots) % len(_PLAYER_COLORS)
+
+    def _cycle_color(self, slot: _Slot):
+        used = {s.color_idx for s in self._slots if s is not slot}
+        start = slot.color_idx
+        for offset in range(1, len(_PLAYER_COLORS) + 1):
+            candidate = (start + offset) % len(_PLAYER_COLORS)
+            if candidate not in used:
+                slot.color_idx = candidate
+                return
+
     def _add_slot(self):
         if len(self._slots) >= _MAX_SLOTS:
             return
         first_ai = self._ai_choices[0][0] if self._ai_choices else "human"
         idx = len(self._slots)
-        self._slots.append(self._make_slot(idx + 1, first_ai, 2, idx))
+        cidx = self._next_free_color()
+        self._slots.append(self._make_slot(idx + 1, first_ai, 2, idx, color_idx=cidx))
         self._rebuild_slot_positions()
 
     def _remove_slot(self, slot: _Slot):
@@ -292,6 +314,9 @@ class CreateLobbyScreen(BaseScreen):
 
     # ── event loop ───────────────────────────────────────────────────────────
 
+    def _any_dd_open(self) -> bool:
+        return any(s.ai_dd.open or s.team_dd.open for s in self._slots)
+
     def run(self) -> ScreenResult:
         while True:
             for event in pygame.event.get():
@@ -300,11 +325,57 @@ class CreateLobbyScreen(BaseScreen):
                 if self._back.handle_event(event):
                     return ScreenResult("main_menu")
 
-                if self._name_input.handle_event(event):
+                # Per-slot name inputs (human players only)
+                name_handled = False
+                for slot in self._slots:
+                    if slot.ai_dd.value == "human" and slot.name_input:
+                        if slot.name_input.handle_event(event):
+                            name_handled = True
+                            break
+                if name_handled:
                     continue
 
+                # Dropdown handling (with open dropdown consuming clicks)
+                dd_changed = False
+                any_open = self._any_dd_open()
+                for slot in self._slots:
+                    if slot.ai_dd.handle_event(event):
+                        for s in self._slots:
+                            if s is not slot:
+                                s.ai_dd.open = False
+                                s.team_dd.open = False
+                        self._rebuild_slot_positions()
+                        dd_changed = True
+                        break
+                    if slot.team_dd.handle_event(event):
+                        for s in self._slots:
+                            if s is not slot:
+                                s.ai_dd.open = False
+                                s.team_dd.open = False
+                        dd_changed = True
+                        break
+                if dd_changed:
+                    continue
+                # If a dropdown was open and got closed, consume the click
+                if any_open and not self._any_dd_open():
+                    continue
+
+                # Color dot click
+                if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                    color_clicked = False
+                    for slot in self._slots:
+                        idx = slot.pid - 1
+                        y = _SLOT_Y_START + idx * _SLOT_ROW_H
+                        dot_cx = self._label_x + 6
+                        dot_cy = y + DD_HEIGHT // 2
+                        if (event.pos[0] - dot_cx) ** 2 + (event.pos[1] - dot_cy) ** 2 <= 64:
+                            self._cycle_color(slot)
+                            color_clicked = True
+                            break
+                    if color_clicked:
+                        continue
+
                 if self._add_btn.handle_event(event):
-                    self._name_input.active = False
                     self._add_slot()
                     continue
 
@@ -314,34 +385,12 @@ class CreateLobbyScreen(BaseScreen):
                         removed = slot
                         break
                 if removed is not None:
-                    self._name_input.active = False
                     self._remove_slot(removed)
-                    continue
-
-                changed = False
-                for slot in self._slots:
-                    if slot.ai_dd.handle_event(event):
-                        self._name_input.active = False
-                        for s in self._slots:
-                            if s is not slot:
-                                s.ai_dd.open = False
-                                s.team_dd.open = False
-                        self._update_name_input_pos()
-                        changed = True
-                        break
-                    if slot.team_dd.handle_event(event):
-                        self._name_input.active = False
-                        for s in self._slots:
-                            if s is not slot:
-                                s.ai_dd.open = False
-                                s.team_dd.open = False
-                        changed = True
-                        break
-                if changed:
                     continue
 
                 self._map_size.handle_event(event)
                 self._sl_obstacles.handle_event(event)
+                self._sl_metal_spots.handle_event(event)
                 self._sl_time_limit.handle_event(event)
                 self._debug_summary_cb.handle_event(event)
                 self._headless_cb.handle_event(event)
@@ -358,14 +407,28 @@ class CreateLobbyScreen(BaseScreen):
 
     def _persist_settings(self):
         slots_data = [
-            {"ai_id": s.ai_dd.value, "team": int(s.team_dd.value)}
+            {
+                "ai_id": s.ai_dd.value,
+                "team": int(s.team_dd.value),
+                "color": s.color_idx,
+                "name": s.name_input.text.strip() if s.name_input else "",
+            }
             for s in self._slots
         ]
+        # Extract first human name for backward compat (multiplayer lobby reads it)
+        first_human_name = ""
+        for s in self._slots:
+            if s.ai_dd.value == "human" and s.name_input:
+                n = s.name_input.text.strip()
+                if n:
+                    first_human_name = n
+                    break
         _save_settings({
             "slots": slots_data,
-            "player_name": self._name_input.text.strip(),
+            "player_name": first_human_name,
             "map_size": self._map_size.value,
             "obstacles": self._sl_obstacles.value,
+            "metal_spots": self._sl_metal_spots.value,
             "time_limit": self._sl_time_limit.value,
             "save_debug_summary": self._debug_summary_cb.checked,
             "headless": self._headless_cb.checked,
@@ -383,7 +446,15 @@ class CreateLobbyScreen(BaseScreen):
             if slot.ai_dd.value != "human":
                 player_ai_ids[pid] = slot.ai_dd.value
 
-        player_name = self._name_input.text.strip() or "Unnamed Player"
+        # Use first human slot's name, or fallback
+        player_name = "Unnamed Player"
+        for slot in self._slots:
+            if slot.ai_dd.value == "human" and slot.name_input:
+                n = slot.name_input.text.strip()
+                if n:
+                    player_name = n
+                    break
+
         map_w, map_h = _MAP_SIZES[self._map_size.value]
         obs_val = self._sl_obstacles.value
 
@@ -394,6 +465,7 @@ class CreateLobbyScreen(BaseScreen):
             "width":         map_w,
             "height":        map_h,
             "obstacle_count": (obs_val, obs_val),
+            "metal_spots":   self._sl_metal_spots.value,
             "time_limit":    self._sl_time_limit.value,
             "save_debug_summary": self._debug_summary_cb.checked,
             "headless":      self._headless_cb.checked,
@@ -410,6 +482,7 @@ class CreateLobbyScreen(BaseScreen):
         font   = _get_font(CONTENT_FONT_SIZE + 2)
         small  = _get_font(DD_FONT_SIZE)
         tiny   = _get_font(13)
+        mx, my = pygame.mouse.get_pos()
 
         # ── title ────────────────────────────────────────────────────────────
         title_surf = font_h.render("Create Lobby", True, CONTENT_TEXT)
@@ -435,13 +508,16 @@ class CreateLobbyScreen(BaseScreen):
         # Slot rows
         for slot in self._slots:
             idx = slot.pid - 1
-            y   = self._slot_y(idx)
-            dot_color = _PLAYER_COLORS[idx % len(_PLAYER_COLORS)]
+            y = _SLOT_Y_START + idx * _SLOT_ROW_H
+            dot_color = _PLAYER_COLORS[slot.color_idx % len(_PLAYER_COLORS)]
 
-            # Color dot
+            # Color dot (clickable)
             dot_cx = self._label_x + 6
-            pygame.draw.circle(self.screen, dot_color,
-                               (dot_cx, y + DD_HEIGHT // 2), 5)
+            dot_cy = y + DD_HEIGHT // 2
+            pygame.draw.circle(self.screen, dot_color, (dot_cx, dot_cy), 5)
+            # Hover ring
+            if (mx - dot_cx) ** 2 + (my - dot_cy) ** 2 <= 64:
+                pygame.draw.circle(self.screen, (255, 255, 255), (dot_cx, dot_cy), 7, 1)
 
             # P# label
             lbl = small.render(f"P{slot.pid}", True, CONTENT_TEXT)
@@ -452,13 +528,12 @@ class CreateLobbyScreen(BaseScreen):
             if len(self._slots) > _MIN_SLOTS:
                 slot.remove_btn.draw(self.screen)
 
-        # Name input
-        if self._name_input.visible:
-            name_lbl = small.render("Your name:", True, CONTENT_TEXT)
-            self.screen.blit(name_lbl, (self._name_input.rect.x,
-                                        self._name_input.rect.y - 18))
+            # Per-human name input (inline, same row after × button)
+            if slot.ai_dd.value == "human" and slot.name_input:
+                slot.name_input.draw(self.screen)
 
-        # Add player button
+
+        # Add player button (inline after last slot)
         if len(self._slots) < _MAX_SLOTS:
             self._add_btn.draw(self.screen)
 
@@ -473,6 +548,7 @@ class CreateLobbyScreen(BaseScreen):
 
         self._map_size.draw(self.screen)
         self._sl_obstacles.draw(self.screen)
+        self._sl_metal_spots.draw(self.screen)
         self._sl_time_limit.draw(self.screen)
         self._debug_summary_cb.draw(self.screen)
         self._headless_cb.draw(self.screen)
@@ -482,7 +558,6 @@ class CreateLobbyScreen(BaseScreen):
         self._start_btn.draw(self.screen)
 
         # ── overlays (drawn last for z-order) ─────────────────────────────────
-        self._name_input.draw(self.screen)
         all_dds = [dd for s in self._slots for dd in (s.ai_dd, s.team_dd)]
         for dd in sorted(all_dds, key=lambda d: d.open):
             dd.draw(self.screen)

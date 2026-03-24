@@ -55,6 +55,12 @@ class Camera:
         self.cy = wy + (self.viewport_h / 2.0 - screen_y) / self.zoom
         self._clamp()
 
+    def center_on(self, wx: float, wy: float) -> None:
+        """Center the viewport on a world coordinate."""
+        self.cx = wx
+        self.cy = wy
+        self._clamp()
+
     def reset(self) -> None:
         """Reset camera to default position (centered, fully zoomed out)."""
         self.zoom = self.min_zoom if self.min_zoom < 1.0 else 1.0

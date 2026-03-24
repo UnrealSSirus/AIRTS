@@ -256,13 +256,6 @@ def _draw_single_info(screen: pygame.Surface, r: pygame.Rect, unit,
         bp = unit.get_total_bonus_percent()
         if bp > 0:
             rows.append(("Bonus", f"+{bp}%"))
-        cc_team_t2 = (t2_upgrades or {}).get(unit.team, set())
-        spawn_name = (get_t2_name(unit.spawn_type)
-                      if unit.spawn_type in cc_team_t2
-                      else _display_name(unit.spawn_type))
-        rows.append(("Spawn", spawn_name))
-        progress = min(unit._spawn_timer / CC_SPAWN_INTERVAL, 1.0)
-        rows.append(("Ready", f"{int(progress * 100)}%"))
     if _is_me(unit):
         b = unit.get_spawn_bonus()
         rows.append(("Bonus", f"+{round(b * 100)}%"))
@@ -288,6 +281,7 @@ def _draw_single_info(screen: pygame.Surface, r: pygame.Rect, unit,
             rows.append((ab_name, "Active"))
 
     col_w = 95
+    last_row_y = y
     for i, (label, value) in enumerate(rows):
         c = i % 2
         ro = i // 2
@@ -299,6 +293,26 @@ def _draw_single_info(screen: pygame.Surface, r: pygame.Rect, unit,
         vs = sf.render(value, True, _STAT_VALUE)
         screen.blit(ls, (sx, sy))
         screen.blit(vs, (sx + ls.get_width(), sy))
+        last_row_y = sy + 16
+
+    # CC spawn progress bar (below stat rows)
+    if _is_cc(unit):
+        cc_team_t2 = (t2_upgrades or {}).get(unit.team, set())
+        spawn_name = (get_t2_name(unit.spawn_type)
+                      if unit.spawn_type in cc_team_t2
+                      else _display_name(unit.spawn_type))
+        progress = min(unit._spawn_timer / CC_SPAWN_INTERVAL, 1.0)
+        label_y = last_row_y + 4
+        bar_w = min(r.width, 150)
+        bar_h = 8
+        if label_y + 16 + bar_h <= r.bottom:
+            lt = sf.render(f"Spawning: {spawn_name}", True, _STAT_LABEL)
+            screen.blit(lt, (r.left, label_y))
+            bar_y = label_y + lt.get_height() + 2
+            pygame.draw.rect(screen, (40, 40, 50), (r.left, bar_y, bar_w, bar_h))
+            fill_w = int(bar_w * progress)
+            bar_color = (100, 255, 140) if progress >= 1.0 else (200, 200, 60)
+            pygame.draw.rect(screen, bar_color, (r.left, bar_y, fill_w, bar_h))
 
 
 def _draw_group_grid(screen: pygame.Surface, r: pygame.Rect,
@@ -701,4 +715,40 @@ def handle_hud_click(entities, mx: int, my: int,
         for br, aid, _ in _action_btn_rects(action):
             if br.collidepoint(mx, my):
                 return {"action": aid}
+    return None
+
+
+def handle_display_click(entities, mx: int, my: int,
+                         width: int, height: int, hud_h: int):
+    """If the click hit a unit box in the group grid, return that unit (proxy). Else None."""
+    minimap, display, portrait, _ = _hud_sections(width, height, hud_h)
+    if not display.collidepoint(mx, my):
+        return None
+
+    selected = _get_selected(entities)
+    if len(selected) <= 1:
+        return None
+
+    # Replicate group grid layout from _draw_group_grid
+    cf = _font(16)
+    ct_h = cf.get_height()
+    pad = 8
+    inner = pygame.Rect(display.left + pad, display.top + pad,
+                        display.width - pad * 2, display.height - pad * 2)
+    grid_top = inner.top + ct_h + 4
+    bs = _GROUP_BOX_SIZE
+    gap = _GROUP_BOX_GAP
+    row_h = bs + _GROUP_HP_H + gap + 1
+    cols = max(1, (inner.width + gap) // (bs + gap))
+
+    for i, unit in enumerate(selected):
+        c = i % cols
+        ro = i // cols
+        bx = inner.left + c * (bs + gap)
+        by = grid_top + ro * row_h
+        if by + bs > inner.bottom:
+            break
+        box = pygame.Rect(bx, by, bs, bs)
+        if box.collidepoint(mx, my):
+            return unit
     return None

@@ -77,6 +77,11 @@ def _entity_visual(e: Entity) -> dict | None:
             # Bonus %
             bonus = sum(me.get_spawn_bonus() for me in getattr(e, "metal_extractors", []))
             d["bp"] = int(bonus * 100)
+            # Rally point
+            rp = getattr(e, "rally_point", None)
+            if rp is not None:
+                d["rx"] = _q1(rp[0])
+                d["ry"] = _q1(rp[1])
         # ME-specific fields
         elif e.unit_type == "metal_extractor":
             d["t"] = "ME"
@@ -89,6 +94,13 @@ def _entity_visual(e: Entity) -> dict | None:
                 d["utt"] = 0.0
             d["rut"] = e.researched_unit_type or ""
             d["ifr"] = e.is_fully_reinforced
+            # Reinforce plating stacks (0-4)
+            _rstacks = 0
+            for ab in getattr(e, "abilities", []):
+                if hasattr(ab, "stacks"):
+                    _rstacks = ab.stacks
+                    break
+            d["rst"] = _rstacks
             bonus = e.get_spawn_bonus()
             d["meb"] = int(bonus * 100)
         else:
@@ -104,6 +116,18 @@ def _entity_visual(e: Entity) -> dict | None:
                 weapon = getattr(e, "weapon", None)
                 total = weapon.charge_time if weapon and weapon.charge_time > 0 else 1.0
                 d["chp"] = _q2(1.0 - ct / total)
+            # Abilities (compact: list of {name, stacks?, timer?, active})
+            abs_list = []
+            for ab in getattr(e, "abilities", []):
+                ad: dict = {"n": ab.name, "a": ab.active}
+                if hasattr(ab, "stacks"):
+                    ad["s"] = ab.stacks
+                    ad["ms"] = ab.max_stacks
+                if hasattr(ab, "timer") and ab.timer > 0:
+                    ad["tm"] = _q1(ab.timer)
+                abs_list.append(ad)
+            if abs_list:
+                d["abs"] = abs_list
         if e.target is not None:
             d["tx"] = _q1(e.target[0])
             d["ty"] = _q1(e.target[1])

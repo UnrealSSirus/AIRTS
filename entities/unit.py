@@ -11,7 +11,7 @@ from config.settings import (
 )
 from config.unit_types import UNIT_TYPES
 from core.helpers import angle_diff
-from systems.abilities import ReactiveArmor, ElectricArmor, Focus, ability_from_dict
+from systems.abilities import ReactiveArmor, ElectricArmor, Focus, CombatStim, ability_from_dict
 
 # fire-mode constants
 HOLD_FIRE = "hold_fire"
@@ -139,6 +139,8 @@ class Unit(CircleEntity, Damageable):
             self.abilities = [ElectricArmor()]
         elif unit_type in ("sniper", "sniper_t2"):
             self.abilities = [Focus()]
+        elif unit_type == "soldier_t2":
+            self.abilities = [CombatStim()]
 
     # -- damage -------------------------------------------------------------
 
