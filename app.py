@@ -139,15 +139,14 @@ class App:
             return ScreenResult("main_menu")
 
     def _run_game(self, data: dict) -> ScreenResult:
-        from game import Game
         from systems.map_generator import DefaultMapGenerator
+        from networking.internal_server import InternalServer
+        from networking.client import GameClient
 
         width = data.get("width", 800)
         height = data.get("height", 600)
         obs = data.get("obstacle_count", (4, 8))
         player_name: str = data.get("player_name", "Unnamed Player")
-        headless: bool = data.get("headless", False)
-        save_debug_summary: bool = data.get("save_debug_summary", False)
         enable_t2: bool = data.get("enable_t2", False)
         time_limit: int = data.get("time_limit", 0)  # minutes, 0 = no limit
         max_ticks = time_limit * 60 * 60 if time_limit > 0 else 0  # 60 ticks/sec
@@ -170,57 +169,78 @@ class App:
                 player_ai[pid] = WanderAI()
 
         # Fallback only for bare programmatic calls with no player_team.
-        # When a lobby sends player_team, all unspecified players are human — don't override them.
         if not player_ai and player_team is None:
             from systems.ai import WanderAI
             player_ai = {2: WanderAI()}
 
-        screen_w = self._screen.get_width()
-        screen_h = self._screen.get_height()
-
         replay_config = {
             "player_ai_ids": player_ai_ids,
             "player_ai_names": {pid: ai.ai_name for pid, ai in player_ai.items()},
-            "player_team": player_team,  # needed for replay team-name resolution
+            "player_team": player_team,
             "obstacle_count": list(obs),
             "player_name": player_name,
         }
 
-        game = Game(
+        # --- Route through InternalServer → GameClient → ClientGameScreen ---
+        server = InternalServer(
             width=width,
             height=height,
             map_generator=DefaultMapGenerator(obstacle_count=obs),
             player_ai=player_ai,
             player_team=player_team,
-            screen=self._screen,
-            clock=self._clock,
             replay_config=replay_config,
             player_name=player_name,
-            headless=headless,
             max_ticks=max_ticks,
-            save_debug_summary=save_debug_summary,
-            screen_width=screen_w,
-            screen_height=screen_h,
             enable_t2=enable_t2,
+            max_players=1,
+            host_name=player_name,
         )
 
         try:
-            result = game.run()
+            server.start()
+            server.wait_ready()
+
+            client = GameClient("127.0.0.1", port=server.port, player_name=player_name)
+            client.start()
+
+            # Wait for game_start from server
+            client._game_started.wait(timeout=10.0)
+            if not client.game_started:
+                server.stop()
+                return ScreenResult("main_menu")
+
+            result = ClientGameScreen(
+                self._screen, self._clock, client, is_local=True,
+            ).run()
+
+            # Wait for server to finish and collect its result
+            server.wait_done(timeout=5.0)
+            srv_result = server.result or {}
+
+            # Merge server-side data (stats, replay) with client-side outcome
+            merged = {
+                "winner": srv_result.get("winner", result.data.get("winner", 0)),
+                "human_teams": srv_result.get("human_teams", result.data.get("human_teams", set())),
+                "stats": srv_result.get("stats"),
+                "replay_filepath": srv_result.get("replay_filepath", ""),
+                "team_names": srv_result.get("team_names", result.data.get("team_names", {})),
+                "player_names": srv_result.get("player_names", result.data.get("player_names", {})),
+                "player_team": srv_result.get("player_team", result.data.get("player_team", {})),
+            }
+
         except Exception as exc:
+            server.stop()
             path = log_crash(exc, context="game")
             print(f"[AIRTS] Game crashed — log saved to {path}")
             return ScreenResult("crash_notice",
                                 data={"log_path": path, "context": "game"})
+        finally:
+            server.stop()
 
-        return ScreenResult("results", data={
-            "winner": result.get("winner", 0),
-            "human_teams": result.get("human_teams", set()),
-            "stats": result.get("stats"),
-            "replay_filepath": result.get("replay_filepath"),
-            "team_names": result.get("team_names", {}),
-            "player_names": result.get("player_names", {}),
-            "player_team": result.get("player_team", {}),
-        })
+        if result.next_screen == "quit":
+            return result
+
+        return ScreenResult("results", data=merged)
 
     def _run_mp_host_game(self, data: dict) -> ScreenResult:
         """Run a multiplayer game as the authoritative host."""
@@ -280,6 +300,7 @@ class App:
             host_obj.broadcast_state(
                 game._iteration, game.entities,
                 game.laser_flashes, game._winner,
+                splash_effects=game.splash_effects,
             )
 
         game.step = networked_step  # type: ignore[method-assign]

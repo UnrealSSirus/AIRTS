@@ -2,6 +2,7 @@
 from __future__ import annotations
 import math
 import random
+import sys
 import time
 from typing import Any
 import pygame
@@ -103,6 +104,7 @@ class Game:
         is_multiplayer: bool = False,
         selectable_teams: set[int] | None = None,
         enable_t2: bool = False,
+        server_mode: bool = False,
     ):
         """
         *team_ai* maps team numbers to AI controllers.  Teams **not** present
@@ -121,7 +123,16 @@ class Game:
         # Backward compat: treat team_ai as player_ai when player_ai not given
         if player_ai is None and team_ai is not None:
             player_ai = team_ai
-        if screen is None:
+
+        self._server_mode = server_mode
+
+        if server_mode:
+            # Headless dedicated server — no display, no fonts, no UI
+            self.screen = pygame.Surface((1, 1))
+            self._owns_pygame = False
+            headless = True
+            save_replay = False
+        elif screen is None:
             pygame.init()
             self.screen = pygame.display.set_mode((width, height))
             pygame.display.set_caption(title)
@@ -138,14 +149,15 @@ class Game:
         self._screen_width = screen_width if screen_width is not None else width
         self._screen_height = screen_height if screen_height is not None else height
 
-        # Layout areas
-        self._header_h = 40
-        self._hud_h = int(self._screen_height * 0.20)
-        self._header_rect = pygame.Rect(0, 0, self._screen_width, self._header_h)
-        self._hud_rect = pygame.Rect(0, self._screen_height - self._hud_h,
-                                     self._screen_width, self._hud_h)
-        self._game_area = pygame.Rect(0, self._header_h, self._screen_width,
-                                      self._screen_height - self._header_h - self._hud_h)
+        if not server_mode:
+            # Layout areas
+            self._header_h = 40
+            self._hud_h = int(self._screen_height * 0.20)
+            self._header_rect = pygame.Rect(0, 0, self._screen_width, self._header_h)
+            self._hud_rect = pygame.Rect(0, self._screen_height - self._hud_h,
+                                         self._screen_width, self._hud_h)
+            self._game_area = pygame.Rect(0, self._header_h, self._screen_width,
+                                          self._screen_height - self._header_h - self._hud_h)
 
         self.clock = clock or pygame.time.Clock()
         self.running = False
@@ -158,8 +170,12 @@ class Game:
         self._step_timeout_ms = step_timeout_ms
         self._replay_output_dir = replay_output_dir
         self._player_name = player_name
-        self._fps_font = pygame.font.SysFont(None, 22)
-        self._label_font = pygame.font.SysFont(None, 20)
+        if not server_mode:
+            self._fps_font = pygame.font.SysFont(None, 22)
+            self._label_font = pygame.font.SysFont(None, 20)
+        else:
+            self._fps_font = None
+            self._label_font = None
 
         self.entities: list[Entity] = []
         self.laser_flashes: list[LaserFlash] = []
@@ -269,7 +285,6 @@ class Game:
         self._dragging = False
         self._drag_start: tuple[int, int] = (0, 0)
         self._drag_end: tuple[int, int] = (0, 0)
-        self._selection_surface = pygame.Surface((width, height), pygame.SRCALPHA)
 
         self._rdragging = False
         self._rpath: list[tuple[float, float]] = []
@@ -278,19 +293,22 @@ class Game:
         self._last_click_time: int = 0
         self._last_click_pos: tuple[int, int] = (0, 0)
 
-        self._speed_slider = Slider(self._screen_width - 170, 10, 150, "Speed %", 25, 800, 100, 25)
-        self._pause_btn = Button(self._screen_width - 210, 12, 32, 24, "||", icon="pause")
-        self._reset_cam_btn = Button(70, 12, 50, 24, "Reset", font_size=18)
         self._paused = False
-        self._pause_font = pygame.font.SysFont(None, 48)
         self._mouse_grabbed = False
 
-        # -- camera & world surface -------------------------------------------
-        self._world_surface = pygame.Surface((width, height))
-        self._camera = Camera(self._game_area.w, self._game_area.h, width, height,
-                              max_zoom=CAMERA_MAX_ZOOM)
-        self._mid_dragging = False
-        self._mid_last: tuple[int, int] = (0, 0)
+        if not server_mode:
+            self._selection_surface = pygame.Surface((width, height), pygame.SRCALPHA)
+            self._speed_slider = Slider(self._screen_width - 170, 10, 150, "Speed %", 25, 800, 100, 25)
+            self._pause_btn = Button(self._screen_width - 210, 12, 32, 24, "||", icon="pause")
+            self._reset_cam_btn = Button(70, 12, 50, 24, "Reset", font_size=18)
+            self._pause_font = pygame.font.SysFont(None, 48)
+
+            # -- camera & world surface -------------------------------------------
+            self._world_surface = pygame.Surface((width, height))
+            self._camera = Camera(self._game_area.w, self._game_area.h, width, height,
+                                  max_zoom=CAMERA_MAX_ZOOM)
+            self._mid_dragging = False
+            self._mid_last: tuple[int, int] = (0, 0)
 
         if save_replay:
             self._replay_recorder = ReplayRecorder(width, height, replay_config)
@@ -301,10 +319,11 @@ class Game:
         self._phase: str = "warp_in"
         self._anim_timer: float = 0.0
         self._fragments: list[dict] = []
-        self._anim_surface = pygame.Surface((width, height), pygame.SRCALPHA)
-        self._fog_surface = pygame.Surface((width, height), pygame.SRCALPHA)
-        self._fog_border = pygame.Surface((width, height))
-        self._fog_border.set_colorkey((0, 0, 0))
+        if not server_mode:
+            self._anim_surface = pygame.Surface((width, height), pygame.SRCALPHA)
+            self._fog_surface = pygame.Surface((width, height), pygame.SRCALPHA)
+            self._fog_border = pygame.Surface((width, height))
+            self._fog_border.set_colorkey((0, 0, 0))
 
         self._physics_cooldown: int = 60  # ticks remaining; handles initial spawn settling
 
@@ -749,6 +768,12 @@ class Game:
                 entity.researched_unit_type = unit_type
                 entity.start_upgrade("lab")
 
+        elif cmd.type == "set_pause":
+            self._paused = bool(data.get("paused", False))
+
+        elif cmd.type == "set_speed":
+            self._speed_multiplier = max(0.25, min(8.0, float(data.get("speed", 1.0))))
+
     def _handle_hud_action(self, result: dict):
         """Process an action dict returned by gui.handle_hud_click."""
         action = result["action"]
@@ -1064,7 +1089,7 @@ class Game:
         if self._iteration % GameStats.SAMPLE_INTERVAL == 0:
             self._stats.sample_tick(self._iteration, self.entities)
 
-        if self._headless and (self._iteration == 1 or self._iteration % 5000 == 0):
+        if self._headless and not self._server_mode and (self._iteration == 1 or self._iteration % 5000 == 0):
             self._take_headless_snapshot()
 
         if self._replay_recorder is not None:
@@ -1698,3 +1723,108 @@ class Game:
             sys.exit()
 
         return result
+
+    def run_server(
+        self,
+        pre_step: "callable | None" = None,
+        post_step: "callable | None" = None,
+    ) -> dict[str, Any]:
+        """Run the game loop for a dedicated server — no display, real-time 60Hz.
+
+        *pre_step* is called before each tick (e.g. to inject remote commands).
+        *post_step(tick, entities, laser_flashes, winner)* is called after each
+        tick (e.g. to broadcast state to clients).
+        """
+        # On Windows, increase timer resolution from ~15.6ms to ~1ms so that
+        # time.sleep() is accurate enough for a 60Hz game loop.
+        _win_timer = False
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                ctypes.windll.winmm.timeBeginPeriod(1)
+                _win_timer = True
+            except Exception:
+                pass
+
+        self.running = True
+        self._phase = "playing"
+
+        tick_interval = FIXED_DT / 1.0  # ~16.67ms at 60 ticks/sec
+        next_tick = time.perf_counter()
+
+        try:
+            while self.running and self._phase == "playing":
+                now = time.perf_counter()
+
+                # Always drain commands even while paused (so unpause arrives)
+                if pre_step:
+                    pre_step()
+
+                if self._paused:
+                    time.sleep(0.016)
+                    # Still broadcast current state so clients stay in sync
+                    if post_step:
+                        post_step(self._iteration, self.entities,
+                                  self.laser_flashes, self._winner)
+                    next_tick = time.perf_counter()
+                    continue
+
+                effective_interval = tick_interval / self._speed_multiplier
+                if now < next_tick:
+                    sleep_time = next_tick - now
+                    # Sleep most of the remaining time, then yield for the rest.
+                    # Use a shorter sleep to avoid Windows oversleeping.
+                    if sleep_time > 0.002:
+                        time.sleep(sleep_time - 0.002)
+                    else:
+                        time.sleep(0)  # yield timeslice to other threads
+                    continue
+
+                # Cap catch-up: if we fell too far behind (e.g. GIL contention),
+                # don't try to replay dozens of ticks — just reset to now.
+                if now - next_tick > effective_interval * 4:
+                    next_tick = now
+
+                next_tick += effective_interval
+
+                self.step(FIXED_DT)
+
+                if post_step:
+                    post_step(self._iteration, self.entities,
+                              self.laser_flashes, self._winner)
+
+                # If phase transitioned to explode, the game is over
+                if self._phase == "explode":
+                    self.running = False
+        finally:
+            if _win_timer:
+                try:
+                    ctypes.windll.winmm.timeEndPeriod(1)
+                except Exception:
+                    pass
+
+        # Build result dict (same as run())
+        stats_data = self._stats.finalize(self._winner, self.entities)
+        player_names: dict[int, str] = {
+            pid: (self.player_ai[pid].ai_name if pid in self.player_ai
+                  else self._player_name)
+            for pid in sorted(self.all_players)
+        }
+        team_names: dict[int, str] = {}
+        for team in self.all_teams:
+            names = [
+                player_names[pid]
+                for pid in sorted(self.all_players)
+                if self.player_team.get(pid) == team
+            ]
+            team_names[team] = " & ".join(names) if names else f"Team {team}"
+
+        return {
+            "winner": self._winner,
+            "human_teams": self.human_teams,
+            "stats": stats_data,
+            "replay_filepath": "",
+            "team_names": team_names,
+            "player_names": player_names,
+            "player_team": dict(self.player_team),
+        }

@@ -38,6 +38,9 @@ class GameClient:
         self.map_width: int = 800
         self.map_height: int = 600
         self.obstacles: list[dict] = []
+        self.enable_t2: bool = False
+        self.player_team: dict[int, int] = {}
+        self.player_names: dict[int, str] = {}
 
         self._connected = threading.Event()
         self._game_started = threading.Event()
@@ -45,6 +48,11 @@ class GameClient:
         self._running = True
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
+
+        # Lobby status from server (for "Play Online" mode)
+        self._lobby_status: dict | None = None
+        self._lobby_lock = threading.Lock()
+        self.opponent_name: str = ""
 
     @property
     def client_team(self) -> int:
@@ -62,6 +70,11 @@ class GameClient:
     @property
     def error(self) -> str:
         return self._error
+
+    @property
+    def lobby_status(self) -> dict | None:
+        with self._lobby_lock:
+            return self._lobby_status
 
     # -- lifecycle ----------------------------------------------------------
 
@@ -126,6 +139,10 @@ class GameClient:
         try:
             # Receive lobby info
             msg = await asyncio.wait_for(recv_message(reader), timeout=10.0)
+            if msg and msg.get("msg") == "rejected":
+                self._error = msg.get("reason", "Connection rejected by server")
+                writer.close()
+                return
             if msg and msg.get("msg") == "lobby_info":
                 self.player_id = msg.get("client_player_id", msg.get("client_team", 2))
                 self.host_name = msg.get("host_name", "Host")
@@ -165,7 +182,22 @@ class GameClient:
                 self.obstacles = msg.get("obstacles", [])
                 self.map_width = msg.get("map_width", 800)
                 self.map_height = msg.get("map_height", 600)
+                self.enable_t2 = msg.get("enable_t2", False)
+                # Restore int keys from JSON string keys
+                raw_pt = msg.get("player_team", {})
+                self.player_team = {int(k): v for k, v in raw_pt.items()} if raw_pt else {}
+                raw_pn = msg.get("player_names", {})
+                self.player_names = {int(k): v for k, v in raw_pn.items()} if raw_pn else {}
                 self._game_started.set()
+            elif msg_type == "lobby_status":
+                with self._lobby_lock:
+                    self._lobby_status = msg
+                # Extract opponent name
+                players = msg.get("players", {})
+                for pid_str, info in players.items():
+                    pid = int(pid_str) if isinstance(pid_str, str) else pid_str
+                    if pid != self.player_id and info.get("name"):
+                        self.opponent_name = info["name"]
             elif msg_type in ("state", "game_over"):
                 self._inbound.put(msg)
 
@@ -173,9 +205,9 @@ class GameClient:
         """Send queued commands to the host."""
         while self._running:
             try:
-                cmd_raw = self._outbound_commands.get(timeout=0.05)
+                cmd_raw = self._outbound_commands.get_nowait()
             except queue.Empty:
-                await asyncio.sleep(0.01)
+                await asyncio.sleep(0.005)
                 continue
             try:
                 await send_message(writer, {

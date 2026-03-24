@@ -4,11 +4,15 @@ The host runs the full Game instance in the main thread (with pygame).
 Networking runs in a daemon thread via asyncio. Two thread-safe queues
 bridge the gap:
   - _inbound_commands: remote player commands → game step
-  - _outbound_states:  game state frames → remote player
+  - _outbound per client: game state frames → remote player
+
+Supports up to *max_players* remote clients (default 2 for dedicated server,
+1 for LAN host mode where the host itself is player 1).
 """
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import queue
 import socket
 import threading
@@ -17,54 +21,128 @@ from typing import Any
 from networking.protocol import send_message, recv_message, DEFAULT_PORT
 from systems.commands import GameCommand, CommandQueue
 from systems.replay import (
-    _entity_visual, _laser_visual, _obstacle_visual, RECORD_INTERVAL,
+    _entity_visual, _laser_visual, _obstacle_visual, _splash_visual,
+    RECORD_INTERVAL,
 )
 
 
+@dataclasses.dataclass
+class ClientConnection:
+    """State for a single connected client."""
+    player_id: int
+    name: str = ""
+    reader: asyncio.StreamReader | None = None
+    writer: asyncio.StreamWriter | None = None
+    outbound: queue.Queue = dataclasses.field(default_factory=queue.Queue)
+    connected: threading.Event = dataclasses.field(default_factory=threading.Event)
+    ready: threading.Event = dataclasses.field(default_factory=threading.Event)
+
+
 class GameHost:
-    """Server that accepts one client and bridges commands/state over TCP."""
+    """Server that accepts remote clients and bridges commands/state over TCP.
+
+    *max_players* controls how many remote connections are accepted.
+    For LAN host mode (host plays locally), set max_players=1.
+    For dedicated server (both players remote), set max_players=2.
+    """
 
     def __init__(
         self,
         command_queue: CommandQueue,
         port: int = DEFAULT_PORT,
         host_name: str = "Host",
+        max_players: int = 1,
+        broadcast_interval: int = RECORD_INTERVAL,
+        first_player_id: int | None = None,
     ):
         self._command_queue = command_queue
         self._port = port
         self._host_name = host_name
+        self._max_players = max_players
+        self._broadcast_interval = broadcast_interval
 
         # Cross-thread queues
         self._inbound_commands: queue.Queue[GameCommand] = queue.Queue()
-        self._outbound: queue.Queue[dict] = queue.Queue()
 
-        # Connection state
-        self._client_name: str = ""
-        self._client_player_id: int = 2  # client always plays player 2 in 1v1
-        self._client_connected = threading.Event()
-        self._client_ready = threading.Event()
+        # Multi-client tracking: player_id → ClientConnection
+        self._clients: dict[int, ClientConnection] = {}
+        self._clients_lock = threading.Lock()
+        if first_player_id is not None:
+            self._next_player_id = first_player_id
+        else:
+            self._next_player_id = 2 if max_players == 1 else 1  # LAN: client=2; dedicated: start at 1
+
         self._running = True
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
 
+        # Ephemeral port support: when port=0, OS assigns a free port
+        self._bound_port: int = 0
+        self._bound_event = threading.Event()
+
         # Determine local IP for display
         self.local_ip = self._get_local_ip()
 
+    # -- backward-compat properties (for LAN host, first/only client) -------
+
     @property
     def client_name(self) -> str:
-        return self._client_name
+        with self._clients_lock:
+            for c in self._clients.values():
+                return c.name
+        return ""
 
     @property
     def client_connected(self) -> bool:
-        return self._client_connected.is_set()
+        with self._clients_lock:
+            for c in self._clients.values():
+                if c.connected.is_set():
+                    return True
+        return False
 
     @property
     def client_ready(self) -> bool:
-        return self._client_ready.is_set()
+        with self._clients_lock:
+            for c in self._clients.values():
+                if c.ready.is_set():
+                    return True
+        return False
 
     @property
     def port(self) -> int:
         return self._port
+
+    @property
+    def bound_port(self) -> int:
+        """Actual port after bind (waits for server to start if using port 0)."""
+        self._bound_event.wait(timeout=10.0)
+        return self._bound_port if self._bound_port else self._port
+
+    # -- multi-client properties -------------------------------------------
+
+    @property
+    def all_clients_connected(self) -> bool:
+        with self._clients_lock:
+            if len(self._clients) < self._max_players:
+                return False
+            return all(c.connected.is_set() for c in self._clients.values())
+
+    @property
+    def all_clients_ready(self) -> bool:
+        with self._clients_lock:
+            if len(self._clients) < self._max_players:
+                return False
+            return all(c.ready.is_set() for c in self._clients.values())
+
+    @property
+    def client_names(self) -> dict[int, str]:
+        with self._clients_lock:
+            return {pid: c.name for pid, c in self._clients.items()}
+
+    @property
+    def connected_count(self) -> int:
+        with self._clients_lock:
+            return sum(1 for c in self._clients.values() if c.connected.is_set())
 
     # -- lifecycle ----------------------------------------------------------
 
@@ -98,9 +176,10 @@ class GameHost:
         entities: list,
         laser_flashes: list,
         winner: int,
+        splash_effects: list | None = None,
     ) -> None:
-        """Build a visual state frame and queue it for sending (every RECORD_INTERVAL)."""
-        if tick % RECORD_INTERVAL != 0:
+        """Build a visual state frame and queue it for sending (every broadcast_interval)."""
+        if tick % self._broadcast_interval != 0:
             return
         ent_visuals = []
         for e in entities:
@@ -115,31 +194,57 @@ class GameHost:
             "lasers": lf_list,
             "winner": winner,
         }
-        # Drop old unsent frames if client is slow — keep only latest
-        try:
-            while True:
-                self._outbound.get_nowait()
-        except queue.Empty:
-            pass
-        self._outbound.put(frame)
+        if splash_effects:
+            frame["splashes"] = [_splash_visual(s) for s in splash_effects]
+        # Send to all connected clients
+        with self._clients_lock:
+            for c in self._clients.values():
+                if c.connected.is_set():
+                    # Drop old unsent frames — keep only latest
+                    try:
+                        while True:
+                            c.outbound.get_nowait()
+                    except queue.Empty:
+                        pass
+                    c.outbound.put(frame)
 
-    def send_game_start(self, entities: list, map_width: int, map_height: int) -> None:
+    def send_game_start(
+        self,
+        entities: list,
+        map_width: int,
+        map_height: int,
+        *,
+        enable_t2: bool = False,
+        player_team: dict[int, int] | None = None,
+        player_names: dict[int, str] | None = None,
+    ) -> None:
         """Send the initial game_start message with obstacle data."""
         obstacles = []
         for e in entities:
             od = _obstacle_visual(e)
             if od is not None:
                 obstacles.append(od)
-        self._outbound.put({
+        msg: dict[str, Any] = {
             "msg": "game_start",
             "obstacles": obstacles,
             "map_width": map_width,
             "map_height": map_height,
-        })
+            "enable_t2": enable_t2,
+        }
+        if player_team is not None:
+            msg["player_team"] = {str(k): v for k, v in player_team.items()}
+        if player_names is not None:
+            msg["player_names"] = {str(k): v for k, v in player_names.items()}
+        with self._clients_lock:
+            for c in self._clients.values():
+                c.outbound.put(msg)
 
     def send_game_over(self, winner: int) -> None:
         """Send game_over notification."""
-        self._outbound.put({"msg": "game_over", "winner": winner})
+        msg = {"msg": "game_over", "winner": winner}
+        with self._clients_lock:
+            for c in self._clients.values():
+                c.outbound.put(msg)
 
     # -- networking thread --------------------------------------------------
 
@@ -162,6 +267,14 @@ class GameHost:
         server = await asyncio.start_server(
             self._handle_client, "0.0.0.0", self._port,
         )
+        # Capture actual bound port (important for port=0 / ephemeral)
+        sock = server.sockets[0] if server.sockets else None
+        if sock is not None:
+            self._bound_port = sock.getsockname()[1]
+        else:
+            self._bound_port = self._port
+        self._bound_event.set()
+
         async with server:
             # Keep running until stopped
             while self._running:
@@ -172,44 +285,64 @@ class GameHost:
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
     ) -> None:
-        """Handle a single client connection."""
-        if self._client_connected.is_set():
-            # Only one client allowed
-            writer.close()
-            await writer.wait_closed()
-            return
+        """Handle a new client connection."""
+        # Determine player_id for this client
+        with self._clients_lock:
+            if len(self._clients) >= self._max_players:
+                # Full — reject
+                try:
+                    await send_message(writer, {"msg": "rejected", "reason": "Server full"})
+                except Exception:
+                    pass
+                writer.close()
+                await writer.wait_closed()
+                return
+            player_id = self._next_player_id
+            self._next_player_id += 1
+            conn = ClientConnection(player_id=player_id, reader=reader, writer=writer)
+            self._clients[player_id] = conn
 
-        self._client_connected.set()
+        conn.connected.set()
 
         try:
             # Send lobby info
             await send_message(writer, {
                 "msg": "lobby_info",
-                "client_player_id": self._client_player_id,
+                "client_player_id": player_id,
                 "host_name": self._host_name,
             })
 
             # Wait for join
             msg = await recv_message(reader)
             if msg and msg.get("msg") == "join":
-                self._client_name = msg.get("player_name", "Client")
-                self._client_ready.set()
+                conn.name = msg.get("player_name", "Client")
+                conn.ready.set()
+
+            # Broadcast lobby status to all clients
+            await self._broadcast_lobby_status()
 
             # Run send/recv concurrently
-            recv_task = asyncio.ensure_future(self._recv_loop(reader))
-            send_task = asyncio.ensure_future(self._send_loop(writer))
+            recv_task = asyncio.ensure_future(self._recv_loop(reader, player_id))
+            send_task = asyncio.ensure_future(self._send_loop(writer, conn.outbound))
 
             await asyncio.gather(recv_task, send_task)
 
         except (asyncio.IncompleteReadError, ConnectionError, OSError):
             pass
         finally:
-            self._client_connected.clear()
-            self._client_ready.clear()
+            conn.connected.clear()
+            conn.ready.clear()
+            with self._clients_lock:
+                self._clients.pop(player_id, None)
             writer.close()
+            # Notify remaining clients about the disconnection
+            try:
+                await self._broadcast_lobby_status()
+            except Exception:
+                pass
 
-    async def _recv_loop(self, reader: asyncio.StreamReader) -> None:
-        """Receive commands from the client."""
+    async def _recv_loop(self, reader: asyncio.StreamReader, player_id: int) -> None:
+        """Receive commands from a specific client."""
         while self._running:
             try:
                 msg = await asyncio.wait_for(recv_message(reader), timeout=0.5)
@@ -223,24 +356,49 @@ class GameHost:
                 cmd_data = msg.get("command", "")
                 try:
                     cmd = GameCommand.deserialize(cmd_data)
-                    # Force player_id to client's slot for security
-                    cmd.player_id = self._client_player_id
+                    # Force player_id to this client's slot for security
+                    cmd.player_id = player_id
                     self._inbound_commands.put(cmd)
                 except Exception:
                     pass
 
-    async def _send_loop(self, writer: asyncio.StreamWriter) -> None:
-        """Send queued state frames to the client."""
+    async def _send_loop(self, writer: asyncio.StreamWriter, outbound: queue.Queue) -> None:
+        """Send queued state frames to a specific client."""
         while self._running:
             try:
-                frame = self._outbound.get(timeout=0.05)
+                frame = outbound.get_nowait()
             except queue.Empty:
-                await asyncio.sleep(0.01)
+                await asyncio.sleep(0.005)
                 continue
             try:
                 await send_message(writer, frame)
             except (ConnectionError, OSError):
                 break
+
+    async def _broadcast_lobby_status(self) -> None:
+        """Send lobby_status to all connected clients with current roster."""
+        with self._clients_lock:
+            roster = {
+                pid: {"name": c.name, "ready": c.ready.is_set()}
+                for pid, c in self._clients.items()
+                if c.connected.is_set()
+            }
+            writers = [
+                c.writer for c in self._clients.values()
+                if c.connected.is_set() and c.writer is not None
+            ]
+
+        msg = {
+            "msg": "lobby_status",
+            "players": roster,
+            "max_players": self._max_players,
+            "host_name": self._host_name,
+        }
+        for w in writers:
+            try:
+                await send_message(w, msg)
+            except Exception:
+                pass
 
     @staticmethod
     def _get_local_ip() -> str:

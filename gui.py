@@ -70,15 +70,25 @@ def _draw_t2_chevron(screen: pygame.Surface, x: int, y: int, size: int = 6):
 
 # ── queries ──────────────────────────────────────────────────────────
 
-def get_selected_cc(entities: list[Entity]) -> CommandCenter | None:
+def _is_cc(e) -> bool:
+    """Duck-type check: works for real CommandCenter or proxy objects."""
+    return getattr(e, '_is_command_center', False) or getattr(e, 'unit_type', '') == 'command_center'
+
+
+def _is_me(e) -> bool:
+    """Duck-type check: works for real MetalExtractor or proxy objects."""
+    return getattr(e, '_is_metal_extractor', False) or getattr(e, 'unit_type', '') == 'metal_extractor'
+
+
+def get_selected_cc(entities):
     for e in entities:
-        if isinstance(e, CommandCenter) and e.selected:
+        if _is_cc(e) and getattr(e, 'selected', False):
             return e
     return None
 
 
-def _get_selected(entities: list[Entity]) -> list[Unit]:
-    return [e for e in entities if isinstance(e, Unit) and e.selected]
+def _get_selected(entities) -> list:
+    return [e for e in entities if getattr(e, '_is_unit', False) or isinstance(e, Unit) if getattr(e, 'selected', False)]
 
 
 # ── layout helpers ───────────────────────────────────────────────────
@@ -159,7 +169,7 @@ def _research_btn_rects(ar: pygame.Rect) -> list[tuple[pygame.Rect, str]]:
 
 # ── drawing ──────────────────────────────────────────────────────────
 
-def draw_hud(screen: pygame.Surface, entities: list[Entity],
+def draw_hud(screen: pygame.Surface, entities,
              width: int, height: int, hud_h: int,
              enable_t2: bool = False, t2_upgrades: dict | None = None):
     """Draw the full HUD bar at the bottom of the screen."""
@@ -188,7 +198,7 @@ def _draw_minimap(screen: pygame.Surface, r: pygame.Rect):
 # ── unit / group display ────────────────────────────────────────────
 
 def _draw_display(screen: pygame.Surface, r: pygame.Rect,
-                  selected: list[Unit], t2_upgrades: dict | None = None):
+                  selected: list, t2_upgrades: dict | None = None):
     pygame.draw.rect(screen, _SECTION_BG, r)
     if not selected:
         return
@@ -201,14 +211,14 @@ def _draw_display(screen: pygame.Surface, r: pygame.Rect,
         _draw_group_grid(screen, inner, selected)
 
 
-def _draw_single_info(screen: pygame.Surface, r: pygame.Rect, unit: Unit,
+def _draw_single_info(screen: pygame.Surface, r: pygame.Rect, unit,
                       t2_upgrades: dict | None = None):
     tf = _font(18)
     sf = _font(16)
     y = r.top
 
     # name
-    if isinstance(unit, MetalExtractor) and unit.upgrade_state in ("watch_tower", "research_lab"):
+    if _is_me(unit) and getattr(unit, 'upgrade_state', 'base') in ("watch_tower", "research_lab"):
         name = unit.upgrade_state.replace("_", " ").title()
     elif getattr(unit, "is_t2", False):
         name = get_t2_name(unit.unit_type)
@@ -242,7 +252,7 @@ def _draw_single_info(screen: pygame.Surface, r: pygame.Rect, unit: Unit,
         rows.append(("Range", str(int(w.range))))
         cd = w.cooldown
         rows.append(("CD", f"{cd:.1f}s" if cd != int(cd) else f"{int(cd)}s"))
-    if isinstance(unit, CommandCenter):
+    if _is_cc(unit):
         bp = unit.get_total_bonus_percent()
         if bp > 0:
             rows.append(("Bonus", f"+{bp}%"))
@@ -253,7 +263,7 @@ def _draw_single_info(screen: pygame.Surface, r: pygame.Rect, unit: Unit,
         rows.append(("Spawn", spawn_name))
         progress = min(unit._spawn_timer / CC_SPAWN_INTERVAL, 1.0)
         rows.append(("Ready", f"{int(progress * 100)}%"))
-    if isinstance(unit, MetalExtractor):
+    if _is_me(unit):
         b = unit.get_spawn_bonus()
         rows.append(("Bonus", f"+{round(b * 100)}%"))
         if unit.upgrade_state.startswith("upgrading"):
@@ -292,7 +302,7 @@ def _draw_single_info(screen: pygame.Surface, r: pygame.Rect, unit: Unit,
 
 
 def _draw_group_grid(screen: pygame.Surface, r: pygame.Rect,
-                     selected: list[Unit]):
+                     selected: list):
     cf = _font(16)
     ct = cf.render(f"{len(selected)} units", True, _TITLE_COLOR)
     screen.blit(ct, (r.left, r.top))
@@ -320,7 +330,7 @@ def _draw_group_grid(screen: pygame.Surface, r: pygame.Rect,
         sym = stats.get("symbol")
         base_color = PLAYER_COLORS[unit.player_id - 1]
 
-        if isinstance(unit, CommandCenter):
+        if _is_cc(unit):
             pts = hexagon_points(bs * 0.3)
             tp = [(cx + px, cy + py) for px, py in pts]
             pygame.draw.polygon(screen, base_color, tp)
@@ -346,7 +356,7 @@ def _draw_group_grid(screen: pygame.Surface, r: pygame.Rect,
 # ── portrait ─────────────────────────────────────────────────────────
 
 def _draw_portrait(screen: pygame.Surface, r: pygame.Rect,
-                   selected: list[Unit]):
+                   selected: list):
     pygame.draw.rect(screen, _PORTRAIT_BG, r)
     if not selected:
         return
@@ -365,12 +375,12 @@ def _draw_portrait(screen: pygame.Surface, r: pygame.Rect,
     sym = stats.get("symbol")
     base_color = PLAYER_COLORS[unit.player_id - 1]
 
-    if isinstance(unit, CommandCenter):
+    if _is_cc(unit):
         pts = hexagon_points(sz * 0.35)
         tp = [(cx + px, cy + py) for px, py in pts]
         pygame.draw.polygon(screen, base_color, tp)
         pygame.draw.polygon(screen, TEAM1_SELECTED_COLOR, tp, 2)
-    elif isinstance(unit, MetalExtractor):
+    elif _is_me(unit):
         radius = sz * 0.3
         s = radius * math.sqrt(3) / 2
         pts = [(cx, cy - radius), (cx - s, cy + radius / 2),
@@ -388,7 +398,7 @@ def _draw_portrait(screen: pygame.Surface, r: pygame.Rect,
         pygame.draw.circle(screen, TEAM1_SELECTED_COLOR, (cx, cy), rad, 1)
 
     # name below portrait
-    if isinstance(unit, MetalExtractor) and unit.upgrade_state in ("watch_tower", "research_lab"):
+    if _is_me(unit) and getattr(unit, 'upgrade_state', 'base') in ("watch_tower", "research_lab"):
         pname = unit.upgrade_state.replace("_", " ").title()
     elif getattr(unit, "is_t2", False):
         pname = get_t2_name(unit.unit_type)
@@ -403,7 +413,7 @@ def _draw_portrait(screen: pygame.Surface, r: pygame.Rect,
 # ── actions / build panel ────────────────────────────────────────────
 
 def _draw_actions(screen: pygame.Surface, r: pygame.Rect,
-                  selected: list[Unit], cc: CommandCenter | None,
+                  selected: list, cc=None,
                   enable_t2: bool = False, t2_upgrades: dict | None = None):
     pygame.draw.rect(screen, _SECTION_BG, r)
     if not selected:
@@ -451,7 +461,7 @@ def _draw_actions(screen: pygame.Surface, r: pygame.Rect,
             is_t2_type = hovered_type in cc_team_t2
             _draw_tooltip(screen, hovered_type, r, show_t2=is_t2_type)
 
-    elif enable_t2 and len(selected) == 1 and isinstance(selected[0], MetalExtractor):
+    elif enable_t2 and len(selected) == 1 and _is_me(selected[0]):
         me = selected[0]
         _draw_extractor_actions(screen, r, me, t2_upgrades or {})
 
@@ -478,7 +488,7 @@ def _draw_actions(screen: pygame.Surface, r: pygame.Rect,
 
 
 def _draw_extractor_actions(screen: pygame.Surface, r: pygame.Rect,
-                            me: MetalExtractor, t2_upgrades: dict):
+                            me, t2_upgrades: dict):
     """Draw upgrade/research actions for a selected metal extractor."""
     tf = _font(18)
     sf = _font(14)
@@ -657,7 +667,7 @@ def _draw_tooltip(screen: pygame.Surface, utype: str,
 
 # ── click handling ───────────────────────────────────────────────────
 
-def handle_hud_click(entities: list[Entity], mx: int, my: int,
+def handle_hud_click(entities, mx: int, my: int,
                      width: int, height: int, hud_h: int,
                      enable_t2: bool = False, t2_upgrades: dict | None = None) -> dict | None:
     """Return an action dict if a button was clicked, else None."""
@@ -675,7 +685,7 @@ def handle_hud_click(entities: list[Entity], mx: int, my: int,
             if br.collidepoint(mx, my):
                 return {"action": "set_spawn_type", "unit_type": ut}
 
-    elif enable_t2 and len(selected) == 1 and isinstance(selected[0], MetalExtractor):
+    elif enable_t2 and len(selected) == 1 and _is_me(selected[0]):
         me = selected[0]
         if me.upgrade_state == "base" and me.is_fully_reinforced:
             for br, path, _ in _upgrade_btn_rects(action):

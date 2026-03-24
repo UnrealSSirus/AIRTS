@@ -24,6 +24,12 @@ def main():
                         help="Time limit in minutes, 0 for no limit (default: 15)")
     parser.add_argument("--list-ais", action="store_true",
                         help="List available AI ids and exit")
+    parser.add_argument("--server", action="store_true",
+                        help="Run as a dedicated server (headless, 2 remote clients)")
+    parser.add_argument("--port", type=int, default=7777,
+                        help="Server port (default: 7777)")
+    parser.add_argument("--enable-t2", action="store_true",
+                        help="Enable T2 units")
 
     args = parser.parse_args()
 
@@ -39,7 +45,9 @@ def main():
                 print(f"  {ai_id:20s}  {ai_name}")
         sys.exit(0)
 
-    if args.headless:
+    if args.server:
+        _run_server(args)
+    elif args.headless:
         _run_headless(args)
     else:
         from app import App
@@ -49,6 +57,54 @@ def main():
             from systems.crash_handler import log_crash
             path = log_crash(exc, context="fatal")
             print(f"[AIRTS] Fatal crash — log saved to {path}")
+
+
+def _run_server(args):
+    """Run as a dedicated server — headless, accepts 2 remote clients."""
+    import os
+    os.environ["SDL_VIDEODRIVER"] = "dummy"
+
+    import pygame
+    pygame.init()
+    # Dummy display for pygame internals that need it
+    pygame.display.set_mode((1, 1))
+
+    from networking.server import DedicatedServer
+
+    obs_val = (args.obs_min + args.obs_max) // 2  # use midpoint
+    max_ticks = args.time_limit * 60 * 60 if args.time_limit > 0 else 0
+
+    server = DedicatedServer(
+        port=args.port,
+        width=args.width,
+        height=args.height,
+        obstacle_count=obs_val,
+        max_ticks=max_ticks,
+        enable_t2=args.enable_t2,
+    )
+
+    try:
+        result = server.run()
+    except KeyboardInterrupt:
+        print("\n[Server] Shutting down...")
+        sys.exit(0)
+    except Exception as exc:
+        from systems.crash_handler import log_crash
+        path = log_crash(exc, context="server")
+        print(f"[Server] Crashed — log saved to {path}")
+        sys.exit(1)
+
+    winner = result.get("winner", 0)
+    team_names = result.get("team_names", {})
+    if winner > 0:
+        print(f"[Server] Winner: Player {winner} ({team_names.get(winner, '?')})")
+    elif winner == -1:
+        print("[Server] Result: Draw")
+    else:
+        print("[Server] Result: Undecided")
+
+    pygame.quit()
+    sys.exit(0)
 
 
 def _run_headless(args):
