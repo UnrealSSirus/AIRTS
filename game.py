@@ -218,8 +218,10 @@ class Game:
         if player_team is not None:
             self.player_team: dict[int, int] = player_team
         else:
-            # Default: each player is their own team (1v1 / AI-vs-AI)
-            _all_pids = set(self.player_ai.keys()) | {1, 2}
+            # Default: each player is their own team
+            _all_pids = set(self.player_ai.keys())
+            if len(_all_pids) < 2:
+                _all_pids |= {1, 2}  # backward compat: bare Game() gets 1v1
             self.player_team = {p: p for p in _all_pids}
 
         self.all_teams: set[int] = set(self.player_team.values())
@@ -1097,13 +1099,13 @@ class Game:
                 self._iteration, self.entities, self.laser_flashes,
             )
 
-        # -- win condition: check if < all teams have a living CC ---------------
+        # -- win condition: game ends when <= 1 team has a living CC ---------------
         surviving_teams = {cc.team for cc in self.command_centers if cc.alive}
-        if len(surviving_teams) < len(self.all_teams) and self._winner == 0:
+        if len(surviving_teams) <= 1 and self._winner == 0:
             if len(surviving_teams) == 1:
                 self._winner = next(iter(surviving_teams))
             else:
-                self._winner = -1  # draw
+                self._winner = -1  # draw (all CCs dead)
             # Transition to explode phase instead of ending immediately
             self._phase = "explode"
             self._anim_timer = 0.0
@@ -1112,9 +1114,13 @@ class Game:
             for t in losing_teams:
                 self._init_fragments(t)
 
-        # Tick limit — force draw if exceeded
+        # Tick limit — score-based tiebreaker, then draw if still tied
         if self._max_ticks > 0 and self._iteration >= self._max_ticks and self._winner == 0:
-            self._winner = -1
+            scores = {t: self._stats.compute_score(t, self.entities, 0)
+                      for t in self.all_teams}
+            max_score = max(scores.values()) if scores else 0
+            top = [t for t, s in scores.items() if s == max_score]
+            self._winner = top[0] if len(top) == 1 else -1
             self._phase = "explode"
             self._anim_timer = 0.0
         self._stats.record_subsystem("bookkeeping", (_perf() - _t) * 1000)
@@ -1276,7 +1282,7 @@ class Game:
                 bonus_pct = entity.get_total_bonus_percent()
                 if bonus_pct > 0:
                     name = f"{name} (+{bonus_pct}%)"
-                label_color = PLAYER_COLORS[entity.player_id - 1]
+                label_color = PLAYER_COLORS[(entity.player_id - 1) % len(PLAYER_COLORS)]
                 name_surf = self._label_font.render(name, True, label_color)
                 nx = int(entity.x) - name_surf.get_width() // 2
                 ny = int(entity.y) - 40
@@ -1569,7 +1575,7 @@ class Game:
 
         # Command centers
         for cc in self.command_centers:
-            col = PLAYER_COLORS[cc.player_id - 1]
+            col = PLAYER_COLORS[(cc.player_id - 1) % len(PLAYER_COLORS)]
             pygame.draw.circle(surf, col,
                                (int(cc.x * sx), int(cc.y * sy)), 5)
             pygame.draw.circle(surf, (255, 255, 255),
@@ -1579,7 +1585,7 @@ class Game:
         for u in self.units:
             if u.is_building or not u.alive:
                 continue
-            col = PLAYER_COLORS[u.player_id - 1]
+            col = PLAYER_COLORS[(u.player_id - 1) % len(PLAYER_COLORS)]
             r = 2 if u.unit_type != "tank" else 3
             pygame.draw.circle(surf, col,
                                (int(u.x * sx), int(u.y * sy)), r)

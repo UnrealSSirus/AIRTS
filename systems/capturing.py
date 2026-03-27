@@ -30,13 +30,7 @@ def capture_step(entities: list[Entity], command_centers: list[CommandCenter], u
             weight = 0.3 if unit.unit_type == "scout" else 1.0
             team_counts[unit.team] += weight
 
-        # unit_difference: positive = all_teams[0] leads, negative = all_teams[1] leads
-        if len(all_teams) >= 2:
-            unit_difference = team_counts[all_teams[0]] - team_counts[all_teams[1]]
-        else:
-            unit_difference = team_counts[all_teams[0]] if all_teams else 0.0
-
-        metal_spot.update_progress(unit_difference, dt)
+        metal_spot.update_progress(team_counts, dt)
 
         def _claim_for(claiming_team: int):
             metal_spot.claim(claiming_team)
@@ -50,7 +44,8 @@ def capture_step(entities: list[Entity], command_centers: list[CommandCenter], u
             if stats is not None:
                 stats.record_capture(claiming_team)
 
-        if metal_spot.capture_progress >= 1.0:
-            _claim_for(all_teams[0])
-        elif metal_spot.capture_progress <= -1.0 and len(all_teams) >= 2:
-            _claim_for(all_teams[1])
+        # Check if any team has completed capture
+        for tid, prog in list(metal_spot.capture_progress.items()):
+            if prog >= 1.0:
+                _claim_for(tid)
+                break

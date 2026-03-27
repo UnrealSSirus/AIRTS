@@ -4,14 +4,14 @@ import pygame
 from screens.base import BaseScreen, ScreenResult
 from ui.theme import (
     MENU_BG, BTN_WIDTH, BTN_HEIGHT,
-    GRAPH_LINE_T1, GRAPH_LINE_T2,
-    SCORE_FONT_SIZE, SCORE_T1_COLOR, SCORE_T2_COLOR,
+    GRAPH_LINE_COLORS, GRAPH_FILL_COLORS, SCORE_TEAM_COLORS,
+    SCORE_FONT_SIZE,
     STATS_HEADER_FONT_SIZE, STATS_SUB_FONT_SIZE,
     BUILD_ORDER_RADIUS,
 )
-from ui.widgets import Button, ToggleGroup, LineGraph, _get_font
+from ui.widgets import Button, ToggleGroup, MultiLineGraph, _get_font
 from config.unit_types import UNIT_TYPES
-from config.settings import METAL_EXTRACTOR_SPAWN_BONUS
+from config.settings import METAL_EXTRACTOR_SPAWN_BONUS, TEAM_COLORS
 
 # Player colour dots (matches lobby palette)
 _PLAYER_COLORS = [
@@ -38,21 +38,25 @@ _WHITE = (220, 220, 240)
 # Score bar animation
 _BAR_PAD_X = 30
 _BAR_GAP = 4
-_BAR_HEIGHT = 36
+_BAR_HEIGHT = 28
 _BAR_Y = 48
 _ANIM_MS = 3000
-_BAR_T1_COLOR = (60, 130, 255)
-_BAR_T2_COLOR = (235, 65, 65)
-_BAR_BORDER_T1 = (90, 160, 255)
-_BAR_BORDER_T2 = (255, 100, 100)
+
+
+def _bar_color(team_id: int) -> tuple:
+    """Return (base_color, border_color) for a team's score bar."""
+    base = TEAM_COLORS.get(team_id, (120, 120, 120))
+    # Lighten the base color slightly for the border
+    border = tuple(min(255, c + 30) for c in base[:3])
+    return base, border
 
 
 def _compress_build_order(bo: list[dict]) -> list[dict]:
     """Two-level compression of a build order list.
 
-    Level 1 — same-tick, same-type entries → one entry with ``spawn_count``
+    Level 1 — same-tick, same-type entries -> one entry with ``spawn_count``
                (handles units like scouts that produce 3 per spawn cycle).
-    Level 2 — consecutive events of the same type and spawn_count → ``run_count``
+    Level 2 — consecutive events of the same type and spawn_count -> ``run_count``
                (e.g. four scout batches in a row: Scout (x3) x4).
 
     Output entries have keys: unit_type, tick, spawn_count, run_count.
@@ -160,8 +164,9 @@ class ResultsScreen(BaseScreen):
         self._team_names = team_names or {}
         self._player_names = player_names or {}
         self._player_team = player_team or {}
-        self._name1 = self._team_names.get(1, "Team 1")
-        self._name2 = self._team_names.get(2, "Team 2")
+
+        # Derive the set of team IDs from stats or player_team
+        self._team_ids: list[int] = self._derive_team_ids()
 
         # Badge row: show when 3+ players (shifts tab/graph down)
         self._show_badges = len(self._player_names) >= 3
@@ -202,9 +207,30 @@ class ResultsScreen(BaseScreen):
 
             graph_y = 125 + badge_offset
             graph_h = 340 - badge_offset
-            self._graph = LineGraph(30, graph_y, self.width - 60, graph_h,
-                                    color1=GRAPH_LINE_T1, color2=GRAPH_LINE_T2)
+            self._graph = MultiLineGraph(30, graph_y, self.width - 60, graph_h)
             self._update_graph()
+
+    def _derive_team_ids(self) -> list[int]:
+        """Build a sorted list of team IDs from stats or player_team data."""
+        ids: set[int] = set()
+        if self._stats and "teams" in self._stats:
+            for k in self._stats["teams"]:
+                try:
+                    ids.add(int(k))
+                except (ValueError, TypeError):
+                    pass
+        if self._stats and "final" in self._stats:
+            for k in self._stats["final"]:
+                try:
+                    ids.add(int(k))
+                except (ValueError, TypeError):
+                    pass
+        for t in self._player_team.values():
+            ids.add(t)
+        # Fallback if nothing found
+        if not ids:
+            ids = {1, 2}
+        return sorted(ids)
 
     def _update_graph(self):
         if not self._has_stats:
@@ -212,26 +238,39 @@ class ResultsScreen(BaseScreen):
         key = self._tabs.value
         if key == "build_order":
             return  # build order tab doesn't use graph
-        if key == "step_ms":
-            t1 = self._stats.get("step_ms", [])
-            t2 = []
-        else:
-            t1 = self._stats["teams"].get("1", {}).get(key, [])
-            t2 = self._stats["teams"].get("2", {}).get(key, [])
 
-        # Convert metal spots to build % bonus
-        if key == "metal_spots":
-            bonus_pct = METAL_EXTRACTOR_SPAWN_BONUS * 100  # 8
-            t1 = [v * bonus_pct for v in t1]
-            t2 = [v * bonus_pct for v in t2]
-
-        # Build time labels from timestamps
+        # Build series for each team
+        series: list[dict] = []
         timestamps = self._stats.get("timestamps", [])
-        x_labels = []
-        for ts in timestamps:
-            secs = ts / 60.0
-            m, s = divmod(int(secs), 60)
-            x_labels.append(f"{m}:{s:02d}")
+
+        if key == "step_ms":
+            # step_ms is global, not per-team; show as a single series
+            data = self._stats.get("step_ms", [])
+            series.append({
+                "name": "Step ms",
+                "data": data,
+                "color": GRAPH_LINE_COLORS[0],
+                "visible": True,
+            })
+        else:
+            teams_data = self._stats.get("teams", {})
+            for team_id in sorted(self._team_ids):
+                team_key = str(team_id)
+                data = teams_data.get(team_key, {}).get(key, [])
+
+                # Convert metal spots to build % bonus
+                if key == "metal_spots":
+                    bonus_pct = METAL_EXTRACTOR_SPAWN_BONUS * 100  # 8
+                    data = [v * bonus_pct for v in data]
+
+                color_idx = (team_id - 1) % len(GRAPH_LINE_COLORS)
+                team_name = self._team_names.get(team_id, f"Team {team_id}")
+                series.append({
+                    "name": team_name,
+                    "data": data,
+                    "color": GRAPH_LINE_COLORS[color_idx],
+                    "visible": True,
+                })
 
         title = dict(_TABS).get(key, key)
         self._graph.title = title
@@ -242,7 +281,7 @@ class ResultsScreen(BaseScreen):
         self._graph.y_tick_step = 8.0 if key == "metal_spots" else None
         self._graph.y_integer_ticks = key in ("army_count", "units_killed")
 
-        self._graph.set_data(t1, t2, x_labels, timestamps=timestamps)
+        self._graph.set_series(series, timestamps=timestamps)
 
     def _is_build_tab(self) -> bool:
         return self._has_stats and self._tabs.value == "build_order"
@@ -293,13 +332,13 @@ class ResultsScreen(BaseScreen):
         pygame.display.flip()
 
     def _header_text(self) -> str:
-        """Return header string: 'Draw', 'Team X Victory', or 'Defeat'."""
+        """Return header string: 'Draw', '{team_name} Victory', or 'Defeat'."""
         if self._winner == -1:
             return "Draw"
-        winner_label = f"Team {self._winner}"
+        winner_name = self._team_names.get(self._winner, f"Team {self._winner}")
         if self._human_teams and self._winner not in self._human_teams:
             return "Defeat"
-        return f"{winner_label} Victory"
+        return f"{winner_name} Victory"
 
     def _draw_simple_view(self):
         """Fallback when no stats available."""
@@ -316,7 +355,7 @@ class ResultsScreen(BaseScreen):
             winner_name = self._team_names.get(self._winner, f"Team {self._winner}")
             sub = f"{winner_name} destroyed the enemy Command Center."
         else:
-            sub = "Both Command Centers were destroyed."
+            sub = "All Command Centers were destroyed."
         sub_surf = font_sub.render(sub, True, (160, 160, 180))
         sx = self.width // 2 - sub_surf.get_width() // 2
         sy = y + surf.get_height() + 8
@@ -342,47 +381,8 @@ class ResultsScreen(BaseScreen):
         dur_surf = sub_font.render(dur_str, True, (160, 160, 180))
         self.screen.blit(dur_surf, (self.width - dur_surf.get_width() - 15, 15))
 
-        # -- Animated score bars --
-        final = self._stats.get("final", {})
-        score1 = final.get("1", {}).get("score", 0)
-        score2 = final.get("2", {}).get("score", 0)
-        total = score1 + score2
-
-        elapsed = pygame.time.get_ticks() - self._anim_start
-        progress = _ease_out_cubic(min(1.0, elapsed / _ANIM_MS))
-
-        bar_area = self.width - _BAR_PAD_X * 2 - _BAR_GAP
-        if total > 0:
-            frac1 = score1 / total
-        else:
-            frac1 = 0.5
-        w1 = int(bar_area * frac1 * progress)
-        w2 = int(bar_area * (1.0 - frac1) * progress)
-
-        # Team 1 bar — grows from left
-        r1 = pygame.Rect(_BAR_PAD_X, _BAR_Y, w1, _BAR_HEIGHT)
-        _draw_3d_bar(self.screen, r1, _BAR_T1_COLOR, _BAR_BORDER_T1)
-
-        # Team 2 bar — grows from right
-        r2_x = self.width - _BAR_PAD_X - w2
-        r2 = pygame.Rect(r2_x, _BAR_Y, w2, _BAR_HEIGHT)
-        _draw_3d_bar(self.screen, r2, _BAR_T2_COLOR, _BAR_BORDER_T2)
-
-        # Score text on bars (white)
-        score_font = _get_font(SCORE_FONT_SIZE)
-        s1_surf = score_font.render(f"{self._name1}: {score1:,}", True, (255, 255, 255))
-        s2_surf = score_font.render(f"{self._name2}: {score2:,}", True, (255, 255, 255))
-
-        # Team 1 text — always left-aligned
-        s1_y = _BAR_Y + (_BAR_HEIGHT - s1_surf.get_height()) // 2
-        if progress > 0.05:
-            self.screen.blit(s1_surf, (_BAR_PAD_X + 10, s1_y))
-
-        # Team 2 text — always right-aligned
-        s2_y = _BAR_Y + (_BAR_HEIGHT - s2_surf.get_height()) // 2
-        if progress > 0.05:
-            self.screen.blit(s2_surf,
-                             (self.width - _BAR_PAD_X - s2_surf.get_width() - 10, s2_y))
+        # -- Animated score bars (N teams, stacked vertically) --
+        self._draw_score_bars()
 
         # -- Player badges (shown when 3+ players) --
         if self._show_badges:
@@ -397,35 +397,84 @@ class ResultsScreen(BaseScreen):
         else:
             self._graph.draw(self.screen)
 
+    def _draw_score_bars(self):
+        """Draw N horizontal score bars, one per team, stacked vertically."""
+        final = self._stats.get("final", {})
+
+        # Gather scores for all teams
+        team_scores: list[tuple[int, int]] = []
+        for team_id in sorted(self._team_ids):
+            score = final.get(str(team_id), {}).get("score", 0)
+            team_scores.append((team_id, score))
+
+        max_score = max((s for _, s in team_scores), default=1)
+        if max_score <= 0:
+            max_score = 1
+
+        elapsed = pygame.time.get_ticks() - self._anim_start
+        progress = _ease_out_cubic(min(1.0, elapsed / _ANIM_MS))
+
+        bar_area = self.width - _BAR_PAD_X * 2
+        n_teams = len(team_scores)
+        score_font = _get_font(SCORE_FONT_SIZE if n_teams <= 2 else max(16, SCORE_FONT_SIZE - 4 * (n_teams - 2)))
+
+        for i, (team_id, score) in enumerate(team_scores):
+            bar_y = _BAR_Y + i * (_BAR_HEIGHT + _BAR_GAP)
+            frac = score / max_score if max_score > 0 else 0.0
+            w = int(bar_area * frac * progress)
+            w = max(w, 0)
+
+            base_color, border_color = _bar_color(team_id)
+            rect = pygame.Rect(_BAR_PAD_X, bar_y, w, _BAR_HEIGHT)
+            _draw_3d_bar(self.screen, rect, base_color, border_color)
+
+            # Score text on bar
+            team_name = self._team_names.get(team_id, f"Team {team_id}")
+            color_idx = (team_id - 1) % len(SCORE_TEAM_COLORS)
+            text_color = SCORE_TEAM_COLORS[color_idx]
+            label_surf = score_font.render(f"{team_name}: {score:,}", True, (255, 255, 255))
+
+            text_y = bar_y + (_BAR_HEIGHT - label_surf.get_height()) // 2
+            if progress > 0.05:
+                # Place text inside the bar if it fits, otherwise just after it
+                text_x = _BAR_PAD_X + 10
+                self.screen.blit(label_surf, (text_x, text_y))
+
     def _draw_player_badges(self):
         """Draw a row of colored dots + player names just below the score bars."""
-        badge_y = _BAR_Y + _BAR_HEIGHT + 4
+        n_teams = len(self._team_ids)
+        badge_y = _BAR_Y + n_teams * (_BAR_HEIGHT + _BAR_GAP) + 2
         font = _get_font(14)
-        cx = self.width // 2
 
-        # Group players by team
-        t1_pids = sorted(pid for pid, t in self._player_team.items() if t == 1)
-        t2_pids = sorted(pid for pid, t in self._player_team.items() if t == 2)
+        # Group players by team dynamically
+        team_pids: dict[int, list[int]] = {}
+        for pid, t in self._player_team.items():
+            team_pids.setdefault(t, []).append(pid)
 
-        def _draw_group(pids: list[int], start_x: int, direction: int):
-            """Draw badges starting at start_x, moving in direction (+1=right, -1=left)."""
+        # Layout: spread team groups across the width
+        sorted_teams = sorted(team_pids.keys())
+        n_groups = len(sorted_teams)
+        if n_groups == 0:
+            return
+
+        section_w = (self.width - _BAR_PAD_X * 2) // n_groups
+
+        for gi, team_id in enumerate(sorted_teams):
+            pids = sorted(team_pids[team_id])
+            start_x = _BAR_PAD_X + gi * section_w
             x = start_x
             for pid in pids:
                 name = self._player_names.get(pid, f"P{pid}")
                 color = _PLAYER_COLORS[(pid - 1) % len(_PLAYER_COLORS)]
                 dot_r = 5
-                dot_cx = x + dot_r if direction > 0 else x - dot_r
+                dot_cx = x + dot_r
                 dot_cy = badge_y + dot_r
                 pygame.draw.circle(self.screen, color, (dot_cx, dot_cy), dot_r)
                 name_surf = font.render(name, True, (180, 180, 200))
-                name_x = dot_cx + dot_r + 3 if direction > 0 else dot_cx - dot_r - 3 - name_surf.get_width()
+                name_x = dot_cx + dot_r + 3
                 self.screen.blit(name_surf, (name_x, dot_cy - name_surf.get_height() // 2))
                 item_w = dot_r * 2 + 4 + name_surf.get_width() + 10
-                x += item_w * direction
-
-        # Team 1 badges on left, team 2 on right
-        _draw_group(t1_pids, _BAR_PAD_X, 1)
-        _draw_group(list(reversed(t2_pids)), self.width - _BAR_PAD_X, -1)
+                x += item_w
 
     def _draw_build_order_tab(self):
         """Draw multi-column scrollable build order within the graph area.

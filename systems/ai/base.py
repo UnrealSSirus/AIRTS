@@ -5,6 +5,7 @@ Subclass and override ``on_start`` / ``on_step`` to implement custom behavior.
 Use the built-in helper methods to query world state and issue unit commands.
 """
 from __future__ import annotations
+import math
 from abc import ABC, abstractmethod
 from entities.base import Entity
 from entities.unit import Unit
@@ -101,6 +102,36 @@ class BaseAI(ABC):
             [u for u in self._units if u.alive and u.team != self._team],
             key=lambda u: u.entity_id,
         )
+
+    def get_enemy_ccs(self) -> list[CommandCenter]:
+        """Return living command centers belonging to other teams."""
+        return [e for e in self._entities
+                if isinstance(e, CommandCenter) and e.alive and e.team != self._team]
+
+    def get_enemy_direction(self) -> tuple[float, float]:
+        """Unit vector from own CC toward average enemy CC position."""
+        cc = self.get_cc()
+        if cc is None:
+            return (1.0, 0.0)
+        enemy_ccs = self.get_enemy_ccs()
+        if not enemy_ccs:
+            return (1.0, 0.0)
+        avg_x = sum(ec.x for ec in enemy_ccs) / len(enemy_ccs)
+        avg_y = sum(ec.y for ec in enemy_ccs) / len(enemy_ccs)
+        dx, dy = avg_x - cc.x, avg_y - cc.y
+        dist = math.hypot(dx, dy) or 1.0
+        return (dx / dist, dy / dist)
+
+    def is_on_own_side(self, entity) -> bool:
+        """True if entity is closer to own CC than to any enemy CC."""
+        cc = self.get_cc()
+        if cc is None:
+            return True
+        own_dist_sq = (entity.x - cc.x) ** 2 + (entity.y - cc.y) ** 2
+        for ec in self.get_enemy_ccs():
+            if (entity.x - ec.x) ** 2 + (entity.y - ec.y) ** 2 < own_dist_sq:
+                return False
+        return True
 
     def get_mobile_units(self) -> list[Unit]:
         return sorted(

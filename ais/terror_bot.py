@@ -125,9 +125,9 @@ class TerrorBot(BaseAI):
         if unclaimed:
             nearest = min(unclaimed, key=lambda s: (s.x - cc.x) ** 2 + (s.y - cc.y) ** 2)
             return (nearest.x, nearest.y)
-        # All spots ours — fall back to behind base
-        direction = -1 if (cc and cc.x < self.bounds[0] / 2) else 1
-        return (cc.x + direction * 60, cc.y)
+        # All spots ours — fall back to behind base (away from enemy)
+        ex, ey = self.get_enemy_direction()
+        return (cc.x - ex * 60, cc.y - ey * 60)
 
     @staticmethod
     def _closest(unit, targets):

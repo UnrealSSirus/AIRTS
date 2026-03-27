@@ -538,7 +538,7 @@ class Checkbox:
 # ---------------------------------------------------------------------------
 
 class LineGraph:
-    """Draws a line graph with two data series (team 1 and team 2)."""
+    """Draws a line graph with N data series."""
 
     def __init__(
         self,
@@ -553,6 +553,8 @@ class LineGraph:
         self.color2 = color2
         self.data1: list[float] = []
         self.data2: list[float] = []
+        # N-series support: list of (data, color, label)
+        self._series: list[tuple[list[float], tuple, str]] = []
         self.x_labels: list[str] | None = None  # optional time labels
         self.timestamps: list[int] | None = None  # raw tick values for x-axis
         self.y_suffix: str = ""  # appended to y-axis labels (e.g. "%")
@@ -562,11 +564,24 @@ class LineGraph:
         self._hover_index: int | None = None
         self._hover_mouse_y: int = 0
 
-    def set_data(self, data1: list[float], data2: list[float],
+    def set_data(self, data1: list[float], data2: list[float] | None = None,
                  x_labels: list[str] | None = None,
                  timestamps: list[int] | None = None):
+        """Backward-compat: set 1 or 2 series."""
         self.data1 = data1
-        self.data2 = data2
+        self.data2 = data2 if data2 is not None else []
+        self._series = []  # clear N-series when using legacy API
+        self.x_labels = x_labels
+        self.timestamps = timestamps
+
+    def set_series(self, series: list[tuple[list[float], tuple, str]],
+                   x_labels: list[str] | None = None,
+                   timestamps: list[int] | None = None):
+        """Set N data series. Each entry is (data, color, label)."""
+        self._series = series
+        # Also populate data1/data2 for backward compat in hover/draw logic
+        self.data1 = series[0][0] if len(series) > 0 else []
+        self.data2 = series[1][0] if len(series) > 1 else []
         self.x_labels = x_labels
         self.timestamps = timestamps
 
@@ -585,7 +600,7 @@ class LineGraph:
             gw = self.rect.w - margin_l - margin_r
             gh = self.rect.h - margin_t - margin_b
 
-            n = max(len(self.data1), len(self.data2))
+            n = max((len(s[0]) for s in self._series), default=0) if self._series else max(len(self.data1), len(self.data2))
             if gw > 0 and gh > 0 and n >= 2 and gx <= mx <= gx + gw and gy <= my <= gy + gh:
                 frac = (mx - gx) / gw
                 idx = round(frac * (n - 1))
@@ -702,9 +717,20 @@ class LineGraph:
         if gw <= 0 or gh <= 0:
             return
 
-        n1 = len(self.data1)
-        n2 = len(self.data2)
-        n = max(n1, n2)
+        # Resolve series list
+        if self._series:
+            series = self._series
+        else:
+            series = []
+            if self.data1:
+                series.append((self.data1, self.color1, "T1"))
+            if self.data2:
+                series.append((self.data2, self.color2, "T2"))
+
+        n = max((len(s[0]) for s in series), default=0) if series else 0
+        # Backward-compat accessors for hover code
+        n1 = len(series[0][0]) if len(series) > 0 else 0
+        n2 = len(series[1][0]) if len(series) > 1 else 0
         if n < 2:
             no_data = font.render("No data", True, GRAPH_AXIS_TEXT)
             surface.blit(no_data, (gx + gw // 2 - no_data.get_width() // 2,
@@ -712,7 +738,9 @@ class LineGraph:
             return
 
         # Compute Y range
-        all_vals = self.data1 + self.data2
+        all_vals = []
+        for s_data, _, _ in series:
+            all_vals.extend(s_data)
         y_min = 0.0
         data_max = max(all_vals) if all_vals else 1.0
         if data_max <= y_min:
@@ -761,13 +789,11 @@ class LineGraph:
                 pts.append((px, py))
             return pts
 
-        # Draw lines
-        if n1 >= 2:
-            pts1 = _data_to_points(self.data1)
-            pygame.draw.lines(surface, self.color1, False, pts1, 2)
-        if n2 >= 2:
-            pts2 = _data_to_points(self.data2)
-            pygame.draw.lines(surface, self.color2, False, pts2, 2)
+        # Draw lines for all series
+        for s_data, s_color, _ in series:
+            if len(s_data) >= 2:
+                pts = _data_to_points(s_data)
+                pygame.draw.lines(surface, s_color, False, pts, 2)
 
         # Hover tooltip
         if self._hover_index is not None and n >= 2:
@@ -784,12 +810,12 @@ class LineGraph:
                 frac = (val - y_min) / (y_max - y_min) if y_max > y_min else 0
                 return gy + gh - int(frac * gh)
 
-            v1 = self.data1[hi] if hi < n1 else None
-            v2 = self.data2[hi] if hi < n2 else None
-            if v1 is not None:
-                pygame.draw.circle(surface, self.color1, (hx_pos, _val_y(v1)), 4)
-            if v2 is not None:
-                pygame.draw.circle(surface, self.color2, (hx_pos, _val_y(v2)), 4)
+            hover_vals = []
+            for s_data, s_color, s_label in series:
+                v = s_data[hi] if hi < len(s_data) else None
+                hover_vals.append((v, s_color, s_label))
+                if v is not None:
+                    pygame.draw.circle(surface, s_color, (hx_pos, _val_y(v)), 4)
 
             # Tooltip box
             tip_font = _get_font(GRAPH_FONT_SIZE)
@@ -802,15 +828,16 @@ class LineGraph:
                     return self.value_format.format(v) + self.y_suffix
                 return f"{int(v)}{self.y_suffix}"
 
-            t1_str = f"T1: {_fmt_val(v1)}"
-            t2_str = f"T2: {_fmt_val(v2)}"
-
             time_s = tip_font.render(time_str, True, (220, 220, 240))
-            t1_s = tip_font.render(t1_str, True, self.color1)
-            t2_s = tip_font.render(t2_str, True, self.color2)
-
-            tip_w = max(time_s.get_width(), t1_s.get_width(), t2_s.get_width()) + 12
-            tip_h = time_s.get_height() + t1_s.get_height() + t2_s.get_height() + 12
+            tip_rendered = [time_s]
+            tip_w = time_s.get_width()
+            for v, s_color, s_label in hover_vals:
+                txt = f"{s_label}: {_fmt_val(v)}"
+                rendered = tip_font.render(txt, True, s_color)
+                tip_rendered.append(rendered)
+                tip_w = max(tip_w, rendered.get_width())
+            tip_w += 12
+            tip_h = sum(s.get_height() for s in tip_rendered) + 4 + 2 * len(tip_rendered)
 
             # Position tooltip to stay inside graph bounds
             tip_x = hx_pos + 10
@@ -824,11 +851,9 @@ class LineGraph:
             pygame.draw.rect(surface, (80, 80, 110), tip_rect, 1, border_radius=3)
 
             cy_tip = tip_y + 4
-            surface.blit(time_s, (tip_x + 6, cy_tip))
-            cy_tip += time_s.get_height() + 2
-            surface.blit(t1_s, (tip_x + 6, cy_tip))
-            cy_tip += t1_s.get_height() + 2
-            surface.blit(t2_s, (tip_x + 6, cy_tip))
+            for rendered in tip_rendered:
+                surface.blit(rendered, (tip_x + 6, cy_tip))
+                cy_tip += rendered.get_height() + 2
 
 
 # ---------------------------------------------------------------------------
@@ -847,6 +872,11 @@ class MultiLineGraph:
         self._hover_index: int | None = None
         self._hover_mouse_y: int = 0
         self._legend_rects: list[pygame.Rect] = []  # hit areas per series
+        # Formatting options (mirrored from LineGraph for compatibility)
+        self.y_suffix: str = ""  # appended to y-axis labels (e.g. "%")
+        self.y_tick_step: float | None = None  # explicit y-axis step
+        self.y_integer_ticks: bool = False  # snap y ticks to nice whole numbers
+        self.value_format: str | None = None  # tooltip format (e.g. "{:.2f}")
 
     def set_series(self, series_list: list[dict],
                    timestamps: list[int] | None = None):
@@ -915,6 +945,31 @@ class MultiLineGraph:
     # -- y/x tick computation (reused from LineGraph logic) -------------------
 
     def _compute_y_ticks(self, data_max: float) -> list[float]:
+        if self.y_tick_step is not None:
+            step = self.y_tick_step
+            ticks: list[float] = []
+            v = 0.0
+            top = data_max + step
+            while v <= top:
+                ticks.append(v)
+                v += step
+            return ticks
+
+        if self.y_integer_ticks:
+            nice_int = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000]
+            step_i = nice_int[-1]
+            for s in nice_int:
+                if data_max / s <= 6:
+                    step_i = s
+                    break
+            ticks = []
+            v_i = 0
+            top_i = data_max + step_i
+            while v_i <= top_i:
+                ticks.append(float(v_i))
+                v_i += step_i
+            return ticks
+
         nice_steps = [0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500]
         step = nice_steps[-1]
         for s in nice_steps:
@@ -1013,6 +1068,7 @@ class MultiLineGraph:
                 lbl = f"{val:.0f}"
             else:
                 lbl = f"{val:.1f}"
+            lbl += self.y_suffix
             ls = font.render(lbl, True, GRAPH_AXIS_TEXT)
             surface.blit(ls, (gx - ls.get_width() - 4, ly - ls.get_height() // 2))
 
@@ -1088,7 +1144,11 @@ class MultiLineGraph:
             for s in self._series:
                 if s["visible"] and hi < len(s["data"]):
                     val = s["data"][hi]
-                    lines_text.append(f"{s['name']}: {val:.2f}")
+                    if self.value_format:
+                        val_str = self.value_format.format(val) + self.y_suffix
+                    else:
+                        val_str = f"{int(val)}{self.y_suffix}"
+                    lines_text.append(f"{s['name']}: {val_str}")
                     lines_colors.append(s["color"])
 
             rendered = [tip_font.render(t, True, c)

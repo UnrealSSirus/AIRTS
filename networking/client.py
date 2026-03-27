@@ -33,7 +33,7 @@ class GameClient:
         self._outbound_commands: queue.Queue[str] = queue.Queue()
 
         # Connection state
-        self.player_id: int = 2  # assigned by host in lobby_info
+        self.player_id: int = 0  # assigned by host in lobby_info
         self.host_name: str = ""
         self.map_width: int = 800
         self.map_height: int = 600
@@ -56,8 +56,10 @@ class GameClient:
 
     @property
     def client_team(self) -> int:
-        """Legacy alias for player_id (1v1: player_id == team)."""
-        return self.player_id
+        """Team this client belongs to, derived from player_team mapping."""
+        if self.player_team and self.player_id in self.player_team:
+            return self.player_team[self.player_id]
+        return self.player_id  # fallback for legacy 1v1
 
     @property
     def connected(self) -> bool:

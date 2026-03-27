@@ -28,7 +28,6 @@ class MediumAI(BaseAI):
         own = self.get_own_mobile_units()
         enemies = self.get_enemy_units()
         bw, bh = self.bounds
-        mid_x = bw / 2.0
 
         scouts = [u for u in own if u.unit_type == "scout"]
         tanks = [u for u in own if u.unit_type == "tank"]
@@ -45,10 +44,10 @@ class MediumAI(BaseAI):
         self._last_unit_count = current_count
 
         self._update_build(scouts, tanks, snipers, medics)
-        self._command_scouts(scouts, enemies, cc, mid_x, bw, bh)
-        self._command_tanks(tanks, enemies, cc, mid_x)
+        self._command_scouts(scouts, enemies, cc, bw, bh)
+        self._command_tanks(tanks, enemies, cc)
         self._command_medics(medics, tanks, cc)
-        self._command_snipers(snipers, enemies, tanks, cc, mid_x)
+        self._command_snipers(snipers, enemies, tanks, cc)
 
     # -- build order --------------------------------------------------------
 
@@ -83,14 +82,12 @@ class MediumAI(BaseAI):
 
     # -- helpers ------------------------------------------------------------
 
-    def _on_our_side(self, entity, mid_x: float) -> bool:
-        cc = self.get_cc()
-        on_left = (cc.x < mid_x) if cc else True
-        return (entity.x < mid_x) if on_left else (entity.x > mid_x)
+    def _on_our_side(self, entity) -> bool:
+        return self.is_on_own_side(entity)
 
     # -- scout behavior -----------------------------------------------------
 
-    def _command_scouts(self, scouts, enemies, cc, mid_x, bw, bh):
+    def _command_scouts(self, scouts, enemies, cc, bw, bh):
         if not scouts:
             return
 
@@ -174,14 +171,14 @@ class MediumAI(BaseAI):
 
     # -- tank behavior ------------------------------------------------------
 
-    def _command_tanks(self, tanks, enemies, cc, mid_x):
+    def _command_tanks(self, tanks, enemies, cc):
         if not tanks:
             return
 
         # Prioritize enemy snipers on our side of the map
         enemy_snipers_our_side = [
             e for e in enemies
-            if e.unit_type == "sniper" and self._on_our_side(e, mid_x)
+            if e.unit_type == "sniper" and self._on_our_side(e)
         ]
 
         pushing = len(tanks) >= 4 or enemy_snipers_our_side
@@ -254,12 +251,12 @@ class MediumAI(BaseAI):
 
     # -- sniper behavior ----------------------------------------------------
 
-    def _command_snipers(self, snipers, enemies, tanks, cc, mid_x):
+    def _command_snipers(self, snipers, enemies, tanks, cc):
         if not snipers or not enemies:
             return
 
         enemy_snipers = [e for e in enemies if e.unit_type == "sniper"]
-        enemies_our_side = [e for e in enemies if self._on_our_side(e, mid_x)]
+        enemies_our_side = [e for e in enemies if self._on_our_side(e)]
         enemy_extractors = [e for e in self.get_metal_extractors()
                             if e.team != self._team]
 
