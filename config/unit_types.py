@@ -107,11 +107,11 @@ UNIT_TYPES = {
     "artillery": {
         "hp": 50, "speed": 20, "radius": 7,
         "symbol": ARTILLERY_SYMBOL, "can_attack": True,
-        "fov": 15, "turn_rate": 45, "los": 250,
+        "fov": 15, "turn_rate": 10, "los": 100,
         "weapon": {
-            "name": "ArtilleryCannon", "damage": 100, "range": 160, "cooldown": 6.0,
-            "splash_radius": 40, "splash_damage_max": 50, "splash_damage_min": 1,
-            "charge_time": 2,
+            "name": "ArtilleryCannon", "damage": 50, "range": 160, "cooldown": 6.0,
+            "splash_radius": 40, "splash_damage_max": 40, "splash_damage_min": 1,
+            "charge_time": 2.5,
             "friendly_fire": True,
             "sound": "artillery",
             "laser_width": 6,
@@ -193,10 +193,10 @@ UNIT_TYPES = {
     "artillery_t2": {
         "hp": 120, "speed": 15, "radius": 9,
         "symbol": ARTILLERY_SYMBOL, "can_attack": True,
-        "fov": 15, "turn_rate": 45, "los": 250,
+        "fov": 15, "turn_rate": 25, "los": 150,
         "weapon": {
-            "name": "ArtilleryCannon", "damage": 100, "range": 180, "cooldown": 6.0,
-            "splash_radius": 75, "splash_damage_max": 70, "splash_damage_min": 10,
+            "name": "ArtilleryCannon", "damage": 70, "range": 180, "cooldown": 6.0,
+            "splash_radius": 75, "splash_damage_max": 70, "splash_damage_min": 1,
             "charge_time": 3.0,
             "friendly_fire": True,
             "sound": "artillery",
