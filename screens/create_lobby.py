@@ -61,7 +61,7 @@ _PANEL_BORDER = (42, 42, 62)
 _HDR_COLOR    = (160, 160, 185)   # subdued column-header colour
 _DIVIDER_CLR  = (35, 35, 52)
 
-_TEAM_CHOICES = [("1", "Team 1"), ("2", "Team 2")]
+_TEAM_CHOICES = [(str(i), f"Team {i}") for i in range(1, 9)]
 
 # Vertical layout constants (relative to top of screen)
 _TITLE_Y      = 16
@@ -207,7 +207,7 @@ class CreateLobbyScreen(BaseScreen):
                    color_idx: int = -1, name: str = "") -> _Slot:
         y = self._slot_y(idx)
         ai_idx = self._find_ai_index(ai_id, self._full_choices, 0)
-        team_idx = 0 if team_id == 1 else 1
+        team_idx = max(0, team_id - 1)
         ai_dd = Dropdown(self._ai_dd_x, y, _AI_DD_W, self._full_choices, ai_idx)
         team_dd = Dropdown(self._team_dd_x, y, _TEAM_DD_W, _TEAM_CHOICES, team_idx)
         remove_btn = Button(

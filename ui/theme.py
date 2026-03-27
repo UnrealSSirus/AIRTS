@@ -92,15 +92,46 @@ BG_DOT_COUNT = 30
 GRAPH_BG = (20, 20, 32)
 GRAPH_GRID = (40, 40, 55)
 GRAPH_AXIS_TEXT = (140, 140, 160)
-GRAPH_LINE_T1 = (80, 160, 255)
-GRAPH_LINE_T2 = (255, 90, 90)
-GRAPH_FILL_T1 = (80, 160, 255, 30)
-GRAPH_FILL_T2 = (255, 90, 90, 30)
+GRAPH_LINE_COLORS = [
+    (80,  160, 255),  # T1 blue
+    (255,  90,  90),  # T2 red
+    (80,  220, 160),  # T3 teal
+    (255, 165,  60),  # T4 orange
+    (180, 100, 255),  # T5 purple
+    (80,  220, 220),  # T6 cyan
+    (220, 220,  80),  # T7 yellow
+    (220,  80, 160),  # T8 pink
+]
+GRAPH_FILL_COLORS = [
+    (80,  160, 255, 30),
+    (255,  90,  90, 30),
+    (80,  220, 160, 30),
+    (255, 165,  60, 30),
+    (180, 100, 255, 30),
+    (80,  220, 220, 30),
+    (220, 220,  80, 30),
+    (220,  80, 160, 30),
+]
+SCORE_TEAM_COLORS = [
+    (100, 180, 255),  # T1
+    (255, 120, 120),  # T2
+    (100, 230, 170),  # T3
+    (255, 180,  80),  # T4
+    (190, 130, 255),  # T5
+    (100, 230, 230),  # T6
+    (230, 230, 100),  # T7
+    (230, 100, 170),  # T8
+]
+# Backward-compat aliases
+GRAPH_LINE_T1 = GRAPH_LINE_COLORS[0]
+GRAPH_LINE_T2 = GRAPH_LINE_COLORS[1]
+GRAPH_FILL_T1 = GRAPH_FILL_COLORS[0]
+GRAPH_FILL_T2 = GRAPH_FILL_COLORS[1]
+SCORE_T1_COLOR = SCORE_TEAM_COLORS[0]
+SCORE_T2_COLOR = SCORE_TEAM_COLORS[1]
 GRAPH_TITLE_COLOR = (200, 200, 220)
 GRAPH_FONT_SIZE = 14
 SCORE_FONT_SIZE = 28
-SCORE_T1_COLOR = (100, 180, 255)
-SCORE_T2_COLOR = (255, 120, 120)
 STATS_HEADER_FONT_SIZE = 40
 
 # -- debug performance graph ------------------------------------------------

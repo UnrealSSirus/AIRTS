@@ -9,9 +9,13 @@ def main():
     parser.add_argument("--headless", action="store_true",
                         help="Run in headless mode (AI vs AI, no rendering, auto-exit)")
     parser.add_argument("--team1", type=str, default=None,
-                        help="AI id for team 1 (e.g. 'wander')")
+                        help="AI id for team 1 (e.g. 'wander') — 1v1 shorthand")
     parser.add_argument("--team2", type=str, default=None,
-                        help="AI id for team 2 (e.g. 'wander')")
+                        help="AI id for team 2 (e.g. 'wander') — 1v1 shorthand")
+    parser.add_argument("--teams", type=str, default=None,
+                        help="Comma-separated AI ids for FFA (e.g. 'wander,easy,hard')")
+    parser.add_argument("--player", action="append", default=None,
+                        help="Player spec: 'pid:team:ai_id' (repeatable)")
     parser.add_argument("--width", type=int, default=800,
                         help="Map width (default: 800)")
     parser.add_argument("--height", type=int, default=600,
@@ -117,21 +121,46 @@ def _run_headless(args):
     registry = AIRegistry()
     registry.discover()
     choices = registry.get_choices()
-    ai_ids = [c[0] for c in choices]
+    valid_ids = {c[0] for c in choices}
 
-    # Default to first available AI if not specified
-    t1_id = args.team1 or (ai_ids[0] if ai_ids else "wander")
-    t2_id = args.team2 or (ai_ids[0] if ai_ids else "wander")
+    # Build player_ai and player_team from args
+    player_ai = {}
+    player_team = {}
 
-    for label, ai_id in [("team1", t1_id), ("team2", t2_id)]:
-        if ai_id not in [c[0] for c in choices]:
-            print(f"[AIRTS] Unknown AI '{ai_id}' for {label}. Use --list-ais to see options.")
-            sys.exit(1)
-
-    team_ai = {
-        1: registry.create(t1_id),
-        2: registry.create(t2_id),
-    }
+    if args.player:
+        # Explicit --player pid:team:ai_id specs
+        for spec in args.player:
+            parts = spec.split(":")
+            if len(parts) != 3:
+                print(f"[AIRTS] Invalid --player spec '{spec}'. Format: pid:team:ai_id")
+                sys.exit(1)
+            pid, tid, ai_id = int(parts[0]), int(parts[1]), parts[2]
+            if ai_id not in valid_ids:
+                print(f"[AIRTS] Unknown AI '{ai_id}'. Use --list-ais to see options.")
+                sys.exit(1)
+            player_ai[pid] = registry.create(ai_id)
+            player_team[pid] = tid
+    elif args.teams:
+        # FFA shorthand: --teams "wander,easy,hard"
+        ai_list = [s.strip() for s in args.teams.split(",") if s.strip()]
+        for i, ai_id in enumerate(ai_list):
+            if ai_id not in valid_ids:
+                print(f"[AIRTS] Unknown AI '{ai_id}'. Use --list-ais to see options.")
+                sys.exit(1)
+            pid = i + 1
+            player_ai[pid] = registry.create(ai_id)
+            player_team[pid] = pid  # each player on own team (FFA)
+    else:
+        # Legacy --team1/--team2 (1v1)
+        ai_ids_list = [c[0] for c in choices]
+        t1_id = args.team1 or (ai_ids_list[0] if ai_ids_list else "wander")
+        t2_id = args.team2 or (ai_ids_list[0] if ai_ids_list else "wander")
+        for label, ai_id in [("team1", t1_id), ("team2", t2_id)]:
+            if ai_id not in valid_ids:
+                print(f"[AIRTS] Unknown AI '{ai_id}' for {label}. Use --list-ais to see options.")
+                sys.exit(1)
+        player_ai = {1: registry.create(t1_id), 2: registry.create(t2_id)}
+        player_team = {1: 1, 2: 2}
 
     obs = (args.obs_min, args.obs_max)
     max_ticks = args.time_limit * 60 * 60 if args.time_limit > 0 else 0
@@ -142,10 +171,17 @@ def _run_headless(args):
     pygame.display.set_caption("AIRTS — Headless")
     clock = pygame.time.Clock()
 
-    team_ai_ids = {1: t1_id, 2: t2_id}
+    # Build replay config
+    ai_ids_map = {}
+    ai_names_map = {}
+    for pid, ai in player_ai.items():
+        ai_ids_map[pid] = ai.ai_id
+        ai_names_map[pid] = ai.ai_name
+
     replay_config = {
-        "team_ai_ids": team_ai_ids,
-        "team_ai_names": {t: ai.ai_name for t, ai in team_ai.items()},
+        "player_ai_ids": ai_ids_map,
+        "player_ai_names": ai_names_map,
+        "player_team": player_team,
         "obstacle_count": list(obs),
         "player_name": "Headless",
     }
@@ -154,7 +190,8 @@ def _run_headless(args):
         width=args.width,
         height=args.height,
         map_generator=DefaultMapGenerator(obstacle_count=obs),
-        team_ai=team_ai,
+        player_ai=player_ai,
+        player_team=player_team,
         screen=screen,
         clock=clock,
         replay_config=replay_config,

@@ -53,7 +53,7 @@ class Unit(CircleEntity, Damageable):
         self.player_id = player_id
         self.is_t2: bool = stats.get("is_t2", False)
         self.speed: float = stats["speed"]
-        self.color = PLAYER_COLORS[player_id - 1]
+        self.color = PLAYER_COLORS[(player_id - 1) % len(PLAYER_COLORS)]
         self._base_color = self.color
 
         self.max_hp: float = stats["hp"]
@@ -62,7 +62,7 @@ class Unit(CircleEntity, Damageable):
 
         wdata = stats.get("weapon")
         if wdata:
-            laser_color = wdata.get("laser_color", PLAYER_COLORS[player_id - 1])
+            laser_color = wdata.get("laser_color", PLAYER_COLORS[(player_id - 1) % len(PLAYER_COLORS)])
             if wdata.get("hits_only_friendly", False):
                 laser_color = HEAL_LASER_COLOR
             self.weapon = Weapon(

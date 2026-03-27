@@ -6,9 +6,8 @@ from screens.base import BaseScreen, ScreenResult
 from screens.results import (_draw_3d_bar, _ease_out_cubic,
                               _compress_build_order, _build_order_label,
                               _PLAYER_COLORS as _RES_PLAYER_COLORS,
-                              _BAR_T1_COLOR, _BAR_T2_COLOR, _BAR_BORDER_T1, _BAR_BORDER_T2,
                               _BAR_HEIGHT, _BAR_PAD_X, _BAR_GAP, _ANIM_MS)
-from systems.replay import ReplayReader
+from systems.replay import ReplayReader, normalize_cp
 from config.settings import (
     OBSTACLE_OUTLINE, HEALTH_BAR_WIDTH, HEALTH_BAR_HEIGHT,
     HEALTH_BAR_BG, HEALTH_BAR_FG, HEALTH_BAR_LOW, HEALTH_BAR_OFFSET,
@@ -18,7 +17,7 @@ from config.settings import (
     METAL_SPOT_CAPTURE_ARC_WIDTH,
     METAL_EXTRACTOR_SPAWN_BONUS,
     SELECTED_COLOR, SELECTION_FILL_COLOR, SELECTION_RECT_COLOR,
-    TEAM1_COLOR, TEAM2_COLOR, TEAM_COLORS, RANGE_COLOR, MEDIC_HEAL_COLOR,
+    TEAM_COLORS, PLAYER_COLORS, RANGE_COLOR, MEDIC_HEAL_COLOR,
     CC_LASER_RANGE,
     CAMERA_ZOOM_STEP, CAMERA_MAX_ZOOM,
 )
@@ -26,8 +25,8 @@ from core.camera import Camera
 from config.unit_types import UNIT_TYPES
 from ui.widgets import Slider, Button, ToggleGroup, LineGraph, _get_font
 from ui.theme import (
-    MENU_BG, GRAPH_LINE_T1, GRAPH_LINE_T2,
-    SCORE_FONT_SIZE, SCORE_T1_COLOR, SCORE_T2_COLOR,
+    MENU_BG, GRAPH_LINE_COLORS,
+    SCORE_FONT_SIZE, SCORE_TEAM_COLORS,
     STATS_HEADER_FONT_SIZE, STATS_SUB_FONT_SIZE,
     BUILD_ORDER_RADIUS,
 )
@@ -153,8 +152,11 @@ class ReplayPlaybackScreen(BaseScreen):
             names = [self._player_names.get(p, f"P{p}") for p in sorted(pids)]
             self._team_names[tid] = " & ".join(names) if names else f"Team {tid}"
 
-        self._name1 = self._team_names.get(1, "Team 1")
-        self._name2 = self._team_names.get(2, "Team 2")
+        # Build ordered list of (team_id, label) for team view cycling
+        # Index 0 = "All Teams", then one entry per team sorted by team_id
+        self._team_view_options: list[tuple[int, str]] = [(0, "All Teams")]
+        for tid, name in sorted(self._team_names.items()):
+            self._team_view_options.append((tid, name))
 
         self._playing = True
         self._ended = False
@@ -248,7 +250,10 @@ class ReplayPlaybackScreen(BaseScreen):
             self._stat_tabs = ToggleGroup(tab_x, 80, _STAT_TABS,
                                           selected_index=0, btn_w=tab_w, btn_h=28)
             self._stat_graph = LineGraph(30, 115, sw - 60, sh - 200,
-                                         color1=GRAPH_LINE_T1, color2=GRAPH_LINE_T2)
+                                         color1=GRAPH_LINE_COLORS[0],
+                                         color2=GRAPH_LINE_COLORS[1]
+                                              if len(GRAPH_LINE_COLORS) > 1
+                                              else GRAPH_LINE_COLORS[0])
             has_subsystem = "subsystem_ms" in (self._stats_data or {})
             btn_w = 120
             gap = 10
@@ -277,18 +282,27 @@ class ReplayPlaybackScreen(BaseScreen):
         key = self._stat_tabs.value
         if key == "build_order":
             return  # build order tab doesn't use graph
-        if key == "step_ms":
-            t1 = self._stats_data.get("step_ms", [])
-            t2 = []
-        else:
-            t1 = self._stats_data.get("teams", {}).get("1", {}).get(key, [])
-            t2 = self._stats_data.get("teams", {}).get("2", {}).get(key, [])
 
-        # Convert metal spots to build % bonus
-        if key == "metal_spots":
-            bonus_pct = METAL_EXTRACTOR_SPAWN_BONUS * 100  # 8
-            t1 = [v * bonus_pct for v in t1]
-            t2 = [v * bonus_pct for v in t2]
+        teams_data = self._stats_data.get("teams", {})
+
+        if key == "step_ms":
+            # step_ms is global, not per-team
+            series = [(self._stats_data.get("step_ms", []),
+                        GRAPH_LINE_COLORS[0], "Step ms")]
+        else:
+            # Build one series per team, sorted by team key
+            series: list[tuple[list[float], tuple, str]] = []
+            for team_key in sorted(teams_data.keys(), key=lambda k: int(k)):
+                tid = int(team_key)
+                data = teams_data[team_key].get(key, [])
+                # Convert metal spots to build % bonus
+                if key == "metal_spots":
+                    bonus_pct = METAL_EXTRACTOR_SPAWN_BONUS * 100  # 8
+                    data = [v * bonus_pct for v in data]
+                color_idx = tid - 1
+                color = GRAPH_LINE_COLORS[color_idx % len(GRAPH_LINE_COLORS)]
+                label = self._team_names.get(tid, f"Team {tid}")
+                series.append((data, color, label))
 
         timestamps = self._stats_data.get("timestamps", [])
         x_labels = []
@@ -305,7 +319,7 @@ class ReplayPlaybackScreen(BaseScreen):
         self._stat_graph.y_tick_step = 8.0 if key == "metal_spots" else None
         self._stat_graph.y_integer_ticks = key in ("army_count", "units_killed")
 
-        self._stat_graph.set_data(t1, t2, x_labels, timestamps=timestamps)
+        self._stat_graph.set_series(series, x_labels, timestamps=timestamps)
 
     def _is_build_tab(self) -> bool:
         return self._stats_data is not None and self._stat_tabs.value == "build_order"
@@ -421,9 +435,10 @@ class ReplayPlaybackScreen(BaseScreen):
                     continue
 
                 if self._team_view_btn.handle_event(event):
-                    self._team_view = (self._team_view + 1) % 3
-                    _TV_LABELS = ["All Teams", self._name1, self._name2]
-                    self._team_view_btn.label = _TV_LABELS[self._team_view]
+                    n_opts = len(self._team_view_options)
+                    self._team_view = (self._team_view + 1) % n_opts
+                    tid, label = self._team_view_options[self._team_view]
+                    self._team_view_btn.label = label
                     self._selected_ids.clear()
                     continue
 
@@ -687,17 +702,22 @@ class ReplayPlaybackScreen(BaseScreen):
                 break
         return idx
 
-    def _get_latest_stat_values(self, key: str) -> tuple[float, float]:
-        """Get the time-series value for a stat key at the current replay time."""
+    def _get_latest_stat_values(self, key: str) -> dict[int, float]:
+        """Get the time-series value for a stat key at the current replay time.
+
+        Returns a dict mapping team_id -> value for all teams in the data.
+        """
         if not self._stats_data:
-            return 0.0, 0.0
+            return {}
         idx = self._get_stat_index()
         teams = self._stats_data.get("teams", {})
-        t1_list = teams.get("1", {}).get(key, [])
-        t2_list = teams.get("2", {}).get(key, [])
-        v1 = t1_list[idx] if idx < len(t1_list) else (t1_list[-1] if t1_list else 0.0)
-        v2 = t2_list[idx] if idx < len(t2_list) else (t2_list[-1] if t2_list else 0.0)
-        return float(v1), float(v2)
+        result: dict[int, float] = {}
+        for team_key in sorted(teams.keys(), key=lambda k: int(k)):
+            tid = int(team_key)
+            data_list = teams[team_key].get(key, [])
+            val = data_list[idx] if idx < len(data_list) else (data_list[-1] if data_list else 0.0)
+            result[tid] = float(val)
+        return result
 
     def _handle_stat_dropdown_event(self, event: pygame.event.Event) -> bool:
         """Handle arrow button events for single-stat mode (mode 2)."""
@@ -712,22 +732,25 @@ class ReplayPlaybackScreen(BaseScreen):
         return False
 
     def _draw_comparison_bar(self, x: int, y: int, w: int, h: int,
-                             v1: float, v2: float):
-        """Draw a horizontal bar split proportionally between T1 and T2."""
-        total = v1 + v2
+                             values: dict[int, float]):
+        """Draw a horizontal bar split proportionally among N teams."""
+        total = sum(values.values())
         if total <= 0:
-            # Both zero — gray 50/50
             pygame.draw.rect(self.screen, (60, 60, 70), (x, y, w, h),
                              border_radius=2)
         else:
-            t1_w = max(1, int(w * v1 / total))
-            t2_w = w - t1_w
-            if t1_w > 0:
-                pygame.draw.rect(self.screen, GRAPH_LINE_T1,
-                                 (x, y, t1_w, h), border_radius=2)
-            if t2_w > 0:
-                pygame.draw.rect(self.screen, GRAPH_LINE_T2,
-                                 (x + t1_w, y, t2_w, h), border_radius=2)
+            cx = x
+            sorted_tids = sorted(values.keys())
+            for i, tid in enumerate(sorted_tids):
+                frac = values[tid] / total
+                is_last = (i == len(sorted_tids) - 1)
+                seg_w = (w - (cx - x)) if is_last else max(1, int(w * frac))
+                if seg_w > 0:
+                    color_idx = tid - 1
+                    color = GRAPH_LINE_COLORS[color_idx % len(GRAPH_LINE_COLORS)]
+                    pygame.draw.rect(self.screen, color,
+                                     (cx, y, seg_w, h), border_radius=2)
+                cx += seg_w
 
     def _draw_stat_text(self, text: str, font, color: tuple, x: int, y: int):
         """Draw text with a dark shadow for readability against the game."""
@@ -756,26 +779,40 @@ class ReplayPlaybackScreen(BaseScreen):
             row_h = 22
             for i, (key, label) in enumerate(_DROPDOWN_STATS):
                 ry = py + i * row_h
-                v1, v2 = self._get_latest_stat_values(key)
+                values = self._get_latest_stat_values(key)
 
                 self._draw_stat_text(label, font, (180, 180, 200), px + 6, ry + 2)
 
                 bar_x = px + 70
                 bar_w = pw - 76
-                self._draw_comparison_bar(bar_x, ry + 3, bar_w, 8, v1, v2)
+                self._draw_comparison_bar(bar_x, ry + 3, bar_w, 8, values)
 
-                v1_str = _fmt_stat(key, v1)
-                v2_str = _fmt_stat(key, v2)
-                self._draw_stat_text(v1_str, val_font, GRAPH_LINE_T1,
-                                     bar_x, ry + 12)
-                v2s = val_font.render(v2_str, True, GRAPH_LINE_T2)
-                self._draw_stat_text(v2_str, val_font, GRAPH_LINE_T2,
-                                     bar_x + bar_w - v2s.get_width(), ry + 12)
+                # Draw per-team value labels below the bar
+                sorted_tids = sorted(values.keys())
+                n_teams = len(sorted_tids)
+                for j, tid in enumerate(sorted_tids):
+                    v_str = _fmt_stat(key, values[tid])
+                    color_idx = tid - 1
+                    color = GRAPH_LINE_COLORS[color_idx % len(GRAPH_LINE_COLORS)]
+                    if n_teams <= 2:
+                        # Classic layout: first left-aligned, last right-aligned
+                        if j == 0:
+                            self._draw_stat_text(v_str, val_font, color,
+                                                 bar_x, ry + 12)
+                        else:
+                            vs = val_font.render(v_str, True, color)
+                            self._draw_stat_text(v_str, val_font, color,
+                                                 bar_x + bar_w - vs.get_width(), ry + 12)
+                    else:
+                        # Evenly spaced for 3+ teams
+                        seg = bar_w // n_teams
+                        self._draw_stat_text(v_str, val_font, color,
+                                             bar_x + j * seg, ry + 12)
 
         elif self._stat_mode == 2:
             # Single-stat view with arrows (no background)
             key, label = _DROPDOWN_STATS[self._stat_dropdown_idx]
-            v1, v2 = self._get_latest_stat_values(key)
+            values = self._get_latest_stat_values(key)
 
             lbl = font.render(label, True, (200, 200, 220))
             lbl_x = px + pw // 2 - lbl.get_width() // 2
@@ -784,16 +821,27 @@ class ReplayPlaybackScreen(BaseScreen):
             bar_x = px + 28
             bar_w = pw - 56
             bar_y = py + 24
-            self._draw_comparison_bar(bar_x, bar_y, bar_w, 10, v1, v2)
+            self._draw_comparison_bar(bar_x, bar_y, bar_w, 10, values)
 
-            v1_str = _fmt_stat(key, v1)
-            v2_str = _fmt_stat(key, v2)
-            v1s = val_font.render(v1_str, True, GRAPH_LINE_T1)
-            v2s = val_font.render(v2_str, True, GRAPH_LINE_T2)
-            self._draw_stat_text(v1_str, val_font, GRAPH_LINE_T1,
-                                 bar_x, bar_y + 14)
-            self._draw_stat_text(v2_str, val_font, GRAPH_LINE_T2,
-                                 bar_x + bar_w - v2s.get_width(), bar_y + 14)
+            # Draw per-team value labels below the bar
+            sorted_tids = sorted(values.keys())
+            n_teams = len(sorted_tids)
+            for j, tid in enumerate(sorted_tids):
+                v_str = _fmt_stat(key, values[tid])
+                color_idx = tid - 1
+                color = GRAPH_LINE_COLORS[color_idx % len(GRAPH_LINE_COLORS)]
+                if n_teams <= 2:
+                    if j == 0:
+                        self._draw_stat_text(v_str, val_font, color,
+                                             bar_x, bar_y + 14)
+                    else:
+                        vs = val_font.render(v_str, True, color)
+                        self._draw_stat_text(v_str, val_font, color,
+                                             bar_x + bar_w - vs.get_width(), bar_y + 14)
+                else:
+                    seg = bar_w // n_teams
+                    self._draw_stat_text(v_str, val_font, color,
+                                         bar_x + j * seg, bar_y + 14)
 
             # Arrow buttons on sides
             self._dd_left_btn.rect.topleft = (px + 4, py + 24)
@@ -826,41 +874,45 @@ class ReplayPlaybackScreen(BaseScreen):
         dur_surf = sub_font.render(dur_str, True, (160, 160, 180))
         self.screen.blit(dur_surf, (mw - dur_surf.get_width() - 15, 15))
 
-        # Animated score bars
+        # Animated score bars — N-team proportional
         if self._stats_data and "final" in self._stats_data:
             final = self._stats_data["final"]
-            s1 = final.get("1", {}).get("score", 0)
-            s2 = final.get("2", {}).get("score", 0)
-            total_score = s1 + s2
 
+            # Collect scores for all teams
+            team_scores: list[tuple[int, int]] = []  # (team_id, score)
+            for team_key in sorted(final.keys(), key=lambda k: int(k)):
+                tid = int(team_key)
+                score = final[team_key].get("score", 0)
+                team_scores.append((tid, score))
+
+            total_score = sum(s for _, s in team_scores)
             elapsed = pygame.time.get_ticks() - self._score_anim_start
             progress = _ease_out_cubic(min(1.0, elapsed / _ANIM_MS))
 
             bar_y = 38
-            bar_area = mw - _BAR_PAD_X * 2 - _BAR_GAP
-            frac1 = s1 / total_score if total_score > 0 else 0.5
-            w1 = int(bar_area * frac1 * progress)
-            w2 = int(bar_area * (1.0 - frac1) * progress)
-
-            r1 = pygame.Rect(_BAR_PAD_X, bar_y, w1, _BAR_HEIGHT)
-            _draw_3d_bar(self.screen, r1, _BAR_T1_COLOR, _BAR_BORDER_T1)
-
-            r2_x = mw - _BAR_PAD_X - w2
-            r2 = pygame.Rect(r2_x, bar_y, w2, _BAR_HEIGHT)
-            _draw_3d_bar(self.screen, r2, _BAR_T2_COLOR, _BAR_BORDER_T2)
-
+            n_teams = len(team_scores)
+            bar_area = mw - _BAR_PAD_X * 2 - _BAR_GAP * max(0, n_teams - 1)
             score_font = _get_font(SCORE_FONT_SIZE)
-            s1_surf = score_font.render(f"{self._name1}: {s1:,}", True, (255, 255, 255))
-            s2_surf = score_font.render(f"{self._name2}: {s2:,}", True, (255, 255, 255))
 
-            s1_y = bar_y + (_BAR_HEIGHT - s1_surf.get_height()) // 2
-            if progress > 0.05:
-                self.screen.blit(s1_surf, (_BAR_PAD_X + 10, s1_y))
+            bx = _BAR_PAD_X
+            for i, (tid, score) in enumerate(team_scores):
+                frac = score / total_score if total_score > 0 else 1.0 / max(n_teams, 1)
+                seg_w = int(bar_area * frac * progress)
 
-            s2_y = bar_y + (_BAR_HEIGHT - s2_surf.get_height()) // 2
-            if progress > 0.05:
-                self.screen.blit(s2_surf,
-                                 (mw - _BAR_PAD_X - s2_surf.get_width() - 10, s2_y))
+                color_idx = tid - 1
+                bar_color = SCORE_TEAM_COLORS[color_idx % len(SCORE_TEAM_COLORS)]
+                border_color = tuple(min(c + 30, 255) for c in bar_color[:3])
+
+                r = pygame.Rect(bx, bar_y, seg_w, _BAR_HEIGHT)
+                _draw_3d_bar(self.screen, r, bar_color, border_color)
+
+                team_name = self._team_names.get(tid, f"Team {tid}")
+                s_surf = score_font.render(f"{team_name}: {score:,}", True, (255, 255, 255))
+                s_y = bar_y + (_BAR_HEIGHT - s_surf.get_height()) // 2
+                if progress > 0.05 and seg_w > 10:
+                    self.screen.blit(s_surf, (bx + 10, s_y))
+
+                bx += seg_w + _BAR_GAP
 
         self._stat_tabs.draw(self.screen)
 
@@ -959,7 +1011,8 @@ class ReplayPlaybackScreen(BaseScreen):
             return False
         if self._team_view == 0:
             return True
-        return ent.get("tm") == self._team_view
+        viewed_tid = self._team_view_options[self._team_view][0]
+        return ent.get("tm") == viewed_tid
 
     def _click_select(self, entities: list[dict], mx: float, my: float,
                       additive: bool):
@@ -1105,6 +1158,8 @@ class ReplayPlaybackScreen(BaseScreen):
         if self._team_view == 0:
             return
 
+        viewed_tid = self._team_view_options[self._team_view][0]
+
         FOG_ALPHA = 200
         self._fog_surface.fill((0, 0, 0, FOG_ALPHA))
 
@@ -1114,7 +1169,7 @@ class ReplayPlaybackScreen(BaseScreen):
             t = ent.get("t")
             if t not in ("U", "CC", "ME"):
                 continue
-            if ent.get("tm") != self._team_view:
+            if ent.get("tm") != viewed_tid:
                 continue
             ut = ent.get("ut", "soldier")
             stats = UNIT_TYPES.get(ut, {})
@@ -1153,7 +1208,7 @@ class ReplayPlaybackScreen(BaseScreen):
                 continue
             tm = ent.get("tm", 1)
             name = self._team_names.get(tm, f"Team {tm}")
-            team_color = TEAM1_COLOR if tm == 1 else TEAM2_COLOR
+            team_color = TEAM_COLORS.get(tm, PLAYER_COLORS[0])
             name_surf = font.render(name, True, team_color)
             nx = int(ent.get("x", 0)) - name_surf.get_width() // 2
             ny = int(ent.get("y", 0)) - 40
@@ -1232,7 +1287,8 @@ class ReplayPlaybackScreen(BaseScreen):
         if pts:
             translated = [(x + px, y + py) for px, py in pts]
             pygame.draw.polygon(ws, c, translated)
-            outline = (150, 220, 255) if tm == 1 else (255, 140, 140)
+            tc = TEAM_COLORS.get(tm, PLAYER_COLORS[0])
+            outline = tuple(min(c + 70, 255) for c in tc[:3])
             pygame.draw.polygon(ws, outline, translated, 2)
 
         if hp < CC_HP:
@@ -1244,7 +1300,7 @@ class ReplayPlaybackScreen(BaseScreen):
         x, y = ent.get("x", 0), ent.get("y", 0)
         r = ent.get("r", 5)
         ow = ent.get("ow")
-        cp = ent.get("cp", 0.0)
+        raw_cp = ent.get("cp", 0.0)
 
         # Capture range circle with alpha
         cr = int(METAL_SPOT_CAPTURE_RADIUS)
@@ -1253,29 +1309,28 @@ class ReplayPlaybackScreen(BaseScreen):
         pygame.draw.circle(temp, METAL_SPOT_CAPTURE_RANGE_COLOR, (cr, cr), cr)
         ws.blit(temp, (int(x) - cr, int(y) - cr))
 
-        # Base dot
+        # Base dot — color by owner team
         if ow is None:
             color = (255, 200, 60)
-        elif ow == 1:
-            color = (80, 140, 255)
         else:
-            color = (255, 80, 80)
+            color = TEAM_COLORS.get(ow, PLAYER_COLORS[0])
         pygame.draw.circle(ws, color, (int(x), int(y)), int(r))
 
-        # Capture progress arc
-        if ow is None and abs(cp) > 0.01:
-            progress_color = TEAM_COLORS.get(1, (80, 140, 255)) if cp > 0 else TEAM_COLORS.get(2, (255, 80, 80))
+        # Capture progress arcs — one per team with progress
+        cp_dict = normalize_cp(raw_cp)
+        if ow is None and cp_dict:
             arc_r = METAL_SPOT_CAPTURE_RADIUS + METAL_SPOT_CAPTURE_ARC_WIDTH
-            start_angle = math.pi / 2
-            end_angle = start_angle + cp * math.tau
-            if cp > 0:
-                a, b = start_angle, end_angle
-            else:
-                a, b = end_angle, start_angle
             rect = pygame.Rect(int(x - arc_r), int(y - arc_r),
                                int(arc_r * 2), int(arc_r * 2))
-            pygame.draw.arc(ws, progress_color, rect, a, b,
-                            int(METAL_SPOT_CAPTURE_ARC_WIDTH))
+            for tid, progress in sorted(cp_dict.items()):
+                if progress < 0.01:
+                    continue
+                progress_color = TEAM_COLORS.get(tid, PLAYER_COLORS[0])
+                start_angle = math.pi / 2
+                end_angle = start_angle + progress * math.tau
+                pygame.draw.arc(ws, progress_color, rect,
+                                start_angle, end_angle,
+                                int(METAL_SPOT_CAPTURE_ARC_WIDTH))
 
     def _draw_metal_extractor(self, ent: dict):
         ws = self._world_surface

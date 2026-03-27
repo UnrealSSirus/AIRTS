@@ -16,19 +16,18 @@ def _make_results(**kwargs):
 class TestCombinedTeamNames:
     def test_1v1_name_passthrough(self):
         r = _make_results(team_names={1: "EasyAI", 2: "WanderAI"})
-        assert r._name1 == "EasyAI"
-        assert r._name2 == "WanderAI"
+        assert r._team_names[1] == "EasyAI"
+        assert r._team_names[2] == "WanderAI"
 
     def test_default_team_names(self):
         r = _make_results()
-        assert r._name1 == "Team 1"
-        assert r._name2 == "Team 2"
+        assert r._team_names == {}
 
     def test_2v2_joined_names(self):
         """game.py produces joined names; ResultsScreen just stores them."""
         r = _make_results(team_names={1: "EasyAI & Wander", 2: "HardAI & Peri AI"})
-        assert r._name1 == "EasyAI & Wander"
-        assert r._name2 == "HardAI & Peri AI"
+        assert r._team_names[1] == "EasyAI & Wander"
+        assert r._team_names[2] == "HardAI & Peri AI"
 
 
 class TestGameTeamNamesJoining:

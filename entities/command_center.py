@@ -23,7 +23,7 @@ class CommandCenter(Unit):
             damage=CC_LASER_DAMAGE,
             range=CC_LASER_RANGE,
             cooldown=CC_LASER_COOLDOWN,
-            laser_color=PLAYER_COLORS[player_id - 1],
+            laser_color=PLAYER_COLORS[(player_id - 1) % len(PLAYER_COLORS)],
             laser_width=2,
         )
         self.attack_damage = self.weapon.damage

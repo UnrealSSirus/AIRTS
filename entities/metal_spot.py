@@ -14,28 +14,53 @@ class MetalSpot(CircleEntity, Damageable):
         super().__init__(x, y, METAL_SPOT_RADIUS)
         self.color = METAL_SPOT_COLOR
         self.owner: int | None = None
-        self.capture_progress: float = 0.0  # -1.0 to 1.0 representing the capture progress for each team
+        self.capture_progress: dict[int, float] = {}  # team_id -> 0.0..1.0
         self.no_decay: bool = False  # when True, neutral drift toward 0 is suppressed
 
-    def update_progress(self, unit_difference: float, dt: float):
-        # unit_difference is team 1 units - team 2 units (scouts count as 0.3)
+    def update_progress(self, team_counts: dict[int, float], dt: float):
+        """Update capture progress based on per-team unit presence.
+
+        team_counts maps team_id -> weighted unit count near this spot.
+        The team with strictly more presence than all others combined gains
+        progress; all other teams' progress decays.
+        """
         if self.owner is not None:
             return
 
-        if unit_difference != 0:
-            self.capture_progress += unit_difference * METAL_SPOT_CAPTURE_RATE * dt
-        elif self.capture_progress != 0 and not self.no_decay:
-            # Decay at 1% per second when no one is capturing
-            decay = 0.01 * dt
-            if self.capture_progress > 0:
-                self.capture_progress = max(0.0, self.capture_progress - decay)
+        # Find dominant team (must have strict majority over all others combined)
+        total = sum(team_counts.values())
+        dominant_team = None
+        dominant_count = 0.0
+        for tid, count in team_counts.items():
+            if count > 0 and count > dominant_count:
+                dominant_count = count
+                dominant_team = tid
+
+        others_count = total - dominant_count
+        has_majority = dominant_team is not None and dominant_count > others_count
+
+        if has_majority:
+            net = dominant_count - others_count
+            prog = self.capture_progress.get(dominant_team, 0.0)
+            prog += net * METAL_SPOT_CAPTURE_RATE * dt
+            self.capture_progress[dominant_team] = min(1.0, prog)
+
+        # Decay non-dominant teams' progress
+        for tid in list(self.capture_progress):
+            if tid == dominant_team and has_majority:
+                continue
+            if self.no_decay and not has_majority:
+                continue
+            val = self.capture_progress[tid]
+            val = max(0.0, val - 0.01 * dt)
+            if val <= 0.0:
+                del self.capture_progress[tid]
             else:
-                self.capture_progress = min(0.0, self.capture_progress + decay)
-        self.capture_progress = min(1.0, max(-1.0, self.capture_progress))
+                self.capture_progress[tid] = val
 
     def claim(self, team: int):
         self.owner = team
-        self.capture_progress = 0.0
+        self.capture_progress = {}
 
     def release(self):
         self.owner = None
@@ -58,21 +83,24 @@ class MetalSpot(CircleEntity, Damageable):
         if self.owner is not None:
             return
 
-        # draw the capture progress pie chart
-        _default_arc = (200, 200, 60)
-        progress_color = (TEAM_COLORS.get(1, _default_arc) if self.capture_progress > 0
-                          else TEAM_COLORS.get(2, _default_arc))
+        # draw capture progress arcs (one per contesting team)
+        if not self.capture_progress:
+            return
         arc_r = METAL_SPOT_CAPTURE_RADIUS + METAL_SPOT_CAPTURE_ARC_WIDTH
-        start_angle = math.pi / 2
-        end_angle = start_angle + self.capture_progress * math.tau
-        if self.capture_progress > 0:
-            a = start_angle
-            b = end_angle
-        else:
-            a = end_angle
-            b = start_angle
-        rect = pygame.Rect(int(self.x - arc_r), int(self.y - arc_r), int(arc_r * 2), int(arc_r * 2))
-        pygame.draw.arc(surface, progress_color, rect, a, b, int(METAL_SPOT_CAPTURE_ARC_WIDTH))
+        rect = pygame.Rect(int(self.x - arc_r), int(self.y - arc_r),
+                           int(arc_r * 2), int(arc_r * 2))
+        arc_w = int(METAL_SPOT_CAPTURE_ARC_WIDTH)
+        teams_contesting = sorted(self.capture_progress.keys())
+        n = len(teams_contesting)
+        for i, tid in enumerate(teams_contesting):
+            prog = self.capture_progress[tid]
+            if abs(prog) < 0.01:
+                continue
+            tc = TEAM_COLORS.get(tid, (200, 200, 60))
+            # Each team's arc starts at an offset so they don't overlap
+            base_angle = math.pi / 2 + (2 * math.pi * i / max(n, 1))
+            end_angle = base_angle + prog * (2 * math.pi / max(n, 1))
+            pygame.draw.arc(surface, tc, rect, base_angle, end_angle, arc_w)
 
     # -- serialization --------------------------------------------------------
 
@@ -80,7 +108,7 @@ class MetalSpot(CircleEntity, Damageable):
         d = super().to_dict()
         d.update({
             "owner": self.owner,
-            "capture_progress": self.capture_progress,
+            "capture_progress": {str(tid): val for tid, val in self.capture_progress.items()},
         })
         return d
 
@@ -93,5 +121,17 @@ class MetalSpot(CircleEntity, Damageable):
         ms.obstacle = data["obstacle"]
         ms.alive = data["alive"]
         ms.owner = data["owner"]
-        ms.capture_progress = data["capture_progress"]
+        raw_cp = data.get("capture_progress", {})
+        if isinstance(raw_cp, dict):
+            ms.capture_progress = {int(k): v for k, v in raw_cp.items()}
+        elif isinstance(raw_cp, (int, float)):
+            # Legacy format: float from -1.0 to 1.0
+            if raw_cp >= 0 and raw_cp > 0.001:
+                ms.capture_progress = {1: float(raw_cp)}
+            elif raw_cp < -0.001:
+                ms.capture_progress = {2: abs(float(raw_cp))}
+            else:
+                ms.capture_progress = {}
+        else:
+            ms.capture_progress = {}
         return ms

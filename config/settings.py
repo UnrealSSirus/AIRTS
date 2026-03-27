@@ -24,12 +24,27 @@ PLAYER_COLORS = [
 ]
 
 # Per-team colours used for team-scoped visuals (capture arcs, minimap borders)
-TEAM_COLORS = {1: (80, 140, 255), 2: (255, 80, 80)}
+TEAM_COLORS = {
+    1: (80,  140, 255),  # T1 blue
+    2: (255,  80,  80),  # T2 red
+    3: (80,  220, 160),  # T3 teal
+    4: (255, 160,  60),  # T4 orange
+    5: (180,  80, 220),  # T5 purple
+    6: (80,  220, 220),  # T6 cyan
+    7: (220, 220,  80),  # T7 yellow
+    8: (220,  80, 160),  # T8 pink
+}
 
 # Backward-compat aliases (metal_spot.py / metal_extractor.py still reference these)
-TEAM1_COLOR = PLAYER_COLORS[0]
+TEAM1_COLOR = TEAM_COLORS[1]
 TEAM1_SELECTED_COLOR = (150, 220, 255)
-TEAM2_COLOR = PLAYER_COLORS[2]
+TEAM2_COLOR = TEAM_COLORS[2]
+TEAM3_COLOR = TEAM_COLORS[3]
+TEAM4_COLOR = TEAM_COLORS[4]
+TEAM5_COLOR = TEAM_COLORS[5]
+TEAM6_COLOR = TEAM_COLORS[6]
+TEAM7_COLOR = TEAM_COLORS[7]
+TEAM8_COLOR = TEAM_COLORS[8]
 PATH_COLOR_TEAM1 = (80, 140, 255, 100)
 PATH_DOT_COLOR = (255, 255, 255, 160)
 

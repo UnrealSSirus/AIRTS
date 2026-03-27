@@ -10,10 +10,10 @@ from ui.theme import (
     MENU_BG, CONTENT_TEXT, HEADING_FONT_SIZE, CONTENT_FONT_SIZE,
     BTN_WIDTH, BTN_HEIGHT,
 )
-from ui.widgets import Button, BackButton, Slider, _get_font
+from ui.widgets import Button, BackButton, Slider, Dropdown, _get_font
 from systems.arena import (
     EloTracker, ArenaRunner, TournamentProgress, MatchResult,
-    write_tournament_summary,
+    write_tournament_summary, _format_match_desc,
 )
 
 # Colors
@@ -56,7 +56,7 @@ class _LogEntry:
                  "length_text", "avg_step_text",
                  "elo_delta_a", "elo_delta_b", "elo_color_a", "elo_color_b",
                  "finished", "replay_path", "error_log_path", "match_index",
-                 "status")
+                 "status", "participants", "matchup_text")
 
     def __init__(self):
         self.ai1_name: str = ""
@@ -76,6 +76,8 @@ class _LogEntry:
         self.error_log_path: str = ""
         self.match_index: int = -1
         self.status: str = "Queued"  # "Queued", "Running", "Done", "Error"
+        self.participants: list[tuple[str, int]] = []
+        self.matchup_text: str = ""  # pre-formatted display text
 
 
 class ArenaScreen(BaseScreen):
@@ -130,6 +132,11 @@ class ArenaScreen(BaseScreen):
         self._workers_slider = Slider(cx - 110, 0, 220, "Worker processes",
                                       1, 8, 4, 1)
 
+        # Format dropdown
+        self._format_choices = [("1v1", "1v1"), ("ffa", "FFA"), ("2v2", "2v2")]
+        self._format_dropdown = Dropdown(cx - 110, 0, 220,
+                                         self._format_choices, 0)
+
         # Buttons — positioned at bottom
         btn_y = self.height - 62
         btn_w = 160
@@ -162,6 +169,7 @@ class ArenaScreen(BaseScreen):
                 if not self._runner.running:
                     self._rounds_slider.handle_event(event)
                     self._workers_slider.handle_event(event)
+                    self._format_dropdown.handle_event(event)
 
                 if self._start_btn.handle_event(event):
                     if self._runner.running:
@@ -221,6 +229,12 @@ class ArenaScreen(BaseScreen):
             self._draw()
 
     def _start_tournament(self) -> None:
+        match_format = self._format_choices[self._format_dropdown.selected_index][0]
+
+        if match_format == "2v2" and len(self._ai_choices) < 4:
+            self._status_text = "Need at least 4 AIs for 2v2."
+            self._status_color = _STATUS_ERR
+            return
         if len(self._ai_choices) < 2:
             self._status_text = "Need at least 2 AIs for a tournament."
             self._status_color = _STATUS_ERR
@@ -242,6 +256,7 @@ class ArenaScreen(BaseScreen):
             ai_ids=ai_ids,
             rounds=self._rounds_slider.value,
             workers=self._workers_slider.value,
+            match_format=match_format,
         )
         self._start_btn.label = "Cancel"
         self._status_text = "Tournament in progress..."
@@ -251,12 +266,16 @@ class ArenaScreen(BaseScreen):
         self._progress = self._runner.poll()
 
         # Pre-populate log entries for all matchups
-        for idx, (ai1, ai2) in enumerate(self._progress.matchups):
+        for idx, parts in enumerate(self._progress.matchups):
             entry = _LogEntry()
-            entry.ai1_id = ai1
-            entry.ai2_id = ai2
-            entry.ai1_name = self._ai_names.get(ai1, ai1)
-            entry.ai2_name = self._ai_names.get(ai2, ai2)
+            entry.participants = list(parts)
+            entry.matchup_text = _format_match_desc(parts, self._ai_names)
+            # Keep ai1/ai2 for backward compat in filters
+            if len(parts) >= 2:
+                entry.ai1_id = parts[0][0]
+                entry.ai2_id = parts[1][0]
+                entry.ai1_name = self._ai_names.get(parts[0][0], parts[0][0])
+                entry.ai2_name = self._ai_names.get(parts[1][0], parts[1][0])
             entry.match_index = idx
             self._match_log.append(entry)
 
@@ -295,6 +314,10 @@ class ArenaScreen(BaseScreen):
 
     def _update_log_entry(self, entry: _LogEntry, mr: MatchResult) -> None:
         """Mutate an existing _LogEntry in-place when a result arrives."""
+        entry.participants = mr.participants or []
+        if mr.participants:
+            entry.matchup_text = _format_match_desc(mr.participants, self._ai_names)
+
         ai1_name = self._ai_names.get(mr.ai1_id, mr.ai1_id)
         ai2_name = self._ai_names.get(mr.ai2_id, mr.ai2_id)
         entry.ai1_name = ai1_name
@@ -305,12 +328,17 @@ class ArenaScreen(BaseScreen):
             entry.result_text = "Error"
             entry.result_color = _STATUS_ERR
             entry.status = "Error"
-        elif mr.winner == 1:
-            entry.result_text = f"{ai1_name} wins"
-            entry.result_color = _WIN_COLOR
+        elif mr.winner == -1:
+            entry.result_text = "Draw"
+            entry.result_color = _DRAW_COLOR
             entry.status = "Done"
-        elif mr.winner == 2:
-            entry.result_text = f"{ai2_name} wins"
+        elif mr.winner > 0:
+            winner_ids = [aid for aid, tid in mr.participants if tid == mr.winner] if mr.participants else []
+            if winner_ids:
+                winner_names = [self._ai_names.get(a, a) for a in winner_ids]
+                entry.result_text = ", ".join(winner_names) + " win" + ("s" if len(winner_names) == 1 else "")
+            else:
+                entry.result_text = f"Team {mr.winner} wins"
             entry.result_color = _WIN_COLOR
             entry.status = "Done"
         else:
@@ -327,8 +355,8 @@ class ArenaScreen(BaseScreen):
         # Avg step
         entry.avg_step_text = f"{mr.avg_step_ms:.1f}ms" if mr.avg_step_ms > 0 else "-"
 
-        # Elo delta
-        if mr.winner != 0:
+        # Elo delta (only for 1v1 — multi-player Elo is applied in bulk at tournament end)
+        if mr.winner != 0 and mr.match_format == "1v1":
             da, db = self._elo.compute_delta(
                 mr.ai1_id, mr.ai2_id, mr.winner,
                 ratings_snapshot=self._pre_ratings,
@@ -350,12 +378,20 @@ class ArenaScreen(BaseScreen):
         if self._progress is None:
             return
 
+        fmt = self._progress.match_format
         errors = 0
         for result in self._progress.results:
             if result.winner == 0:
                 errors += 1
                 continue
-            self._elo.update(result.ai1_id, result.ai2_id, result.winner)
+            if fmt == "ffa" and result.participants:
+                self._elo.update_ffa(
+                    result.participants, result.winner, result.contributions)
+            elif fmt == "2v2" and result.participants:
+                self._elo.update_2v2(
+                    result.participants, result.winner, result.contributions)
+            else:
+                self._elo.update(result.ai1_id, result.ai2_id, result.winner)
 
         self._elo.save()
         self._start_btn.label = "Start Tournament"
@@ -378,7 +414,9 @@ class ArenaScreen(BaseScreen):
         if not self._filter_bots:
             return self._match_log
         return [e for e in self._match_log
-                if e.ai1_id in self._filter_bots or e.ai2_id in self._filter_bots]
+                if any(aid in self._filter_bots
+                       for aid, _ in e.participants) or
+                e.ai1_id in self._filter_bots or e.ai2_id in self._filter_bots]
 
     # -- layout helpers --------------------------------------------------------
 
@@ -502,15 +540,26 @@ class ArenaScreen(BaseScreen):
                                         y + row_h // 2 - surf.get_height() // 2))
 
     def _draw_settings(self) -> None:
-        """Draw sliders in the middle area when no tournament has run."""
+        """Draw sliders and format dropdown in the middle area when no tournament has run."""
         log_top = self._log_top_y()
         cx = self.width // 2
         self._rounds_slider.x = cx - 110
         self._rounds_slider.y = log_top + 20
         self._workers_slider.x = cx - 110
         self._workers_slider.y = log_top + 70
+
+        # Format dropdown
+        self._format_dropdown.x = cx - 110
+        self._format_dropdown.y = log_top + 120
+
         self._rounds_slider.draw(self.screen)
         self._workers_slider.draw(self.screen)
+
+        # Label for format
+        font = _get_font(CONTENT_FONT_SIZE)
+        label = font.render("Format", True, CONTENT_TEXT)
+        self.screen.blit(label, (cx - 110, log_top + 105))
+        self._format_dropdown.draw(self.screen)
 
     def _draw_bot_filter(self, y: int) -> int:
         """Draw horizontal row of toggle pill chips. Returns new y below chips."""
@@ -521,8 +570,9 @@ class ArenaScreen(BaseScreen):
         bot_ids: list[str] = []
         seen: set[str] = set()
         for entry in self._match_log:
-            for bid in (entry.ai1_id, entry.ai2_id):
-                if bid not in seen:
+            ids = [aid for aid, _ in entry.participants] if entry.participants else [entry.ai1_id, entry.ai2_id]
+            for bid in ids:
+                if bid and bid not in seen:
                     seen.add(bid)
                     bot_ids.append(bid)
 
@@ -593,13 +643,16 @@ class ArenaScreen(BaseScreen):
         elif self._match_log:
             # Settings sliders above the log when tournament is done
             cx = self.width // 2
-            self._rounds_slider.x = cx - 110
+            self._rounds_slider.x = cx - 220
             self._rounds_slider.y = log_top
             self._workers_slider.x = cx + 10
             self._workers_slider.y = log_top
+            self._format_dropdown.x = cx - 220
+            self._format_dropdown.y = log_top + 32
             self._rounds_slider.draw(self.screen)
             self._workers_slider.draw(self.screen)
-            filter_y = log_top + 48
+            self._format_dropdown.draw(self.screen)
+            filter_y = log_top + 62
         else:
             filter_y = log_top
 
@@ -747,26 +800,35 @@ class ArenaScreen(BaseScreen):
                            x: int, y: int, row_h: int) -> None:
         """Render matchup with inline Elo deltas as multi-colored segments."""
         cy = y + row_h // 2
-        max_w = 300
+        max_w = int(self._table_w * 0.38)
         cursor = x
 
+        # For multi-team (FFA/2v2), use pre-formatted matchup text
+        if entry.participants and len(entry.participants) > 2:
+            text = entry.matchup_text or _format_match_desc(entry.participants, self._ai_names)
+            while font.size(text)[0] > max_w and len(text) > 5:
+                text = text[:-1]
+            if font.size(text)[0] > max_w:
+                text += ".."
+            surf = font.render(text, True, CONTENT_TEXT)
+            self.screen.blit(surf, (cursor, cy - surf.get_height() // 2))
+            return
+
+        # 1v1 with inline Elo deltas
         n1 = entry.ai1_name
         n2 = entry.ai2_name
 
         if entry.elo_delta_a is not None:
-            # Format: "Name1 (+16) vs Name2 (-16)"
             da_sign = "+" if entry.elo_delta_a >= 0 else ""
             db_sign = "+" if entry.elo_delta_b >= 0 else ""
             elo_a_str = f" ({da_sign}{entry.elo_delta_a:.0f})"
             elo_b_str = f" ({db_sign}{entry.elo_delta_b:.0f})"
             vs_str = " vs "
 
-            # Check if it fits
             total_w = (font.size(n1)[0] + font.size(elo_a_str)[0] +
                        font.size(vs_str)[0] + font.size(n2)[0] +
                        font.size(elo_b_str)[0])
             if total_w > max_w:
-                # Truncate names
                 avail = max_w - (font.size(elo_a_str)[0] +
                                  font.size(vs_str)[0] +
                                  font.size(elo_b_str)[0])
@@ -794,7 +856,6 @@ class ArenaScreen(BaseScreen):
                 (elo_b_str, entry.elo_color_b),
             ]
         else:
-            # No Elo yet — just "Name1 vs Name2"
             vs_str = " vs "
             total_w = font.size(n1)[0] + font.size(vs_str)[0] + font.size(n2)[0]
             if total_w > max_w:

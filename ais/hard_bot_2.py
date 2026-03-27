@@ -40,7 +40,6 @@ class HardBot2(BaseAI):
         own = self.get_own_mobile_units()
         enemies = self.get_enemy_units()
         bw, bh = self.bounds
-        mid_x = bw / 2.0
 
         scouts = [u for u in own if u.unit_type == "scout"]
         tanks = [u for u in own if u.unit_type == "tank"]
@@ -81,8 +80,8 @@ class HardBot2(BaseAI):
 
         self._command_scouts(scouts, enemies, enemy_mobile, cc, bw, bh)
         self._command_shockwaves(shockwaves, enemy_mobile, cc)
-        self._command_snipers(snipers, enemies, enemy_mobile, cc, mid_x, tanks)
-        self._command_tanks(tanks, enemies, enemy_mobile, cc, mid_x)
+        self._command_snipers(snipers, enemies, enemy_mobile, cc, tanks)
+        self._command_tanks(tanks, enemies, enemy_mobile, cc)
         self._command_generic(soldiers, enemy_mobile, cc)
         self._command_generic(machine_gunners, enemy_mobile, cc)
         self._command_medics(medics, own, cc)
@@ -178,10 +177,8 @@ class HardBot2(BaseAI):
 
     # -- helpers ---------------------------------------------------------------
 
-    def _on_our_side(self, entity, mid_x: float) -> bool:
-        cc = self.get_cc()
-        on_left = (cc.x < mid_x) if cc else True
-        return (entity.x < mid_x) if on_left else (entity.x > mid_x)
+    def _on_our_side(self, entity) -> bool:
+        return self.is_on_own_side(entity)
 
     def _flee_from(self, unit, threat, dist: float) -> None:
         dx = unit.x - threat.x
@@ -373,7 +370,7 @@ class HardBot2(BaseAI):
                 d = math.hypot(dx, dy) or 1.0
                 self.move_unit(sniper, sniper.x + (dx / d) * 20, sniper.y + (dy / d) * 20)
 
-    def _command_snipers(self, snipers, enemies, enemy_mobile, cc, mid_x, tanks):
+    def _command_snipers(self, snipers, enemies, enemy_mobile, cc, tanks):
         if not snipers:
             return
 
@@ -431,13 +428,13 @@ class HardBot2(BaseAI):
             d = math.hypot(dx, dy) or 1.0
             self.move_unit(tank, tank.x + (dx / d) * 10, tank.y + (dy / d) * 10)
 
-    def _command_tanks(self, tanks, enemies, enemy_mobile, cc, mid_x):
+    def _command_tanks(self, tanks, enemies, enemy_mobile, cc):
         if not tanks:
             return
 
         enemy_snipers_our_side = [
             e for e in enemy_mobile
-            if e.unit_type == "sniper" and self._on_our_side(e, mid_x)
+            if e.unit_type == "sniper" and self._on_our_side(e)
         ]
 
         for tank in tanks:

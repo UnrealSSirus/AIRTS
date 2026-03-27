@@ -44,9 +44,9 @@ class AIRecord:
 
 @dataclass
 class MatchResult:
-    ai1_id: str
-    ai2_id: str
-    winner: int  # 1 = ai1 won, 2 = ai2 won, -1 = draw, 0 = error
+    ai1_id: str = ""
+    ai2_id: str = ""
+    winner: int = 0  # winning team_id, -1 = draw, 0 = error
     ticks: int = 0
     avg_step_ms: float = 0.0
     replay_path: str = ""
@@ -54,6 +54,10 @@ class MatchResult:
     error_traceback: str = ""
     error_log_path: str = ""
     match_index: int = -1
+    match_format: str = "1v1"
+    # N-player fields
+    participants: list[tuple[str, int]] = field(default_factory=list)  # [(ai_id, team_id)]
+    contributions: dict[int, float] = field(default_factory=dict)  # team_id → score
 
 
 @dataclass
@@ -61,10 +65,10 @@ class TournamentProgress:
     total: int = 0
     completed: int = 0
     results: list[MatchResult] = field(default_factory=list)
-    pending_matchups: list[tuple[str, str]] = field(default_factory=list)
     done: bool = False
-    matchups: list[tuple[str, str]] = field(default_factory=list)
+    matchups: list[list[tuple[str, int]]] = field(default_factory=list)  # each: [(ai_id, team_id), ...]
     active_match_indices: list[int] = field(default_factory=list)
+    match_format: str = "1v1"
 
 
 # ---------------------------------------------------------------------------
@@ -83,17 +87,19 @@ _K = 32
 # ---------------------------------------------------------------------------
 
 def _write_error_log(
-    ai1_id: str, ai2_id: str, error_msg: str, tb: str,
+    participants: list[tuple[str, int]], error_msg: str, tb: str,
 ) -> str:
     """Write an error log for a failed match. Returns the filepath."""
     os.makedirs(_LOGS_DIR, exist_ok=True)
     ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    filename = f"error_{ai1_id}_vs_{ai2_id}_{ts}.log"
+    ids = "_vs_".join(aid for aid, _ in participants[:4])
+    filename = f"error_{ids}_{ts}.log"
     filepath = os.path.join(_LOGS_DIR, filename)
+    match_desc = " vs ".join(f"{aid}(t{tid})" for aid, tid in participants)
     lines = [
         "AIRTS Arena Match Error",
         f"Time: {datetime.now().isoformat(timespec='seconds')}",
-        f"Match: {ai1_id} vs {ai2_id}",
+        f"Match: {match_desc}",
         "=" * 60,
         error_msg.rstrip(),
         "",
@@ -149,12 +155,17 @@ def write_tournament_summary(
     lines.append("Per-Match Results")
     lines.append("=" * 60)
     for i, r in enumerate(results, 1):
-        n1 = ai_names.get(r.ai1_id, r.ai1_id)
-        n2 = ai_names.get(r.ai2_id, r.ai2_id)
-        if r.winner == 1:
-            outcome = f"{n1} wins"
-        elif r.winner == 2:
-            outcome = f"{n2} wins"
+        if r.participants:
+            match_desc = _format_match_desc(r.participants, ai_names)
+        else:
+            match_desc = f"{ai_names.get(r.ai1_id, r.ai1_id)} vs {ai_names.get(r.ai2_id, r.ai2_id)}"
+        if r.winner > 0:
+            # Find winner AI name(s)
+            winner_ids = [aid for aid, tid in r.participants if tid == r.winner] if r.participants else []
+            if winner_ids:
+                outcome = f"Team {r.winner} ({', '.join(ai_names.get(a, a) for a in winner_ids)}) wins"
+            else:
+                outcome = f"Team {r.winner} wins"
         elif r.winner == -1:
             outcome = "Draw"
         else:
@@ -162,26 +173,28 @@ def write_tournament_summary(
         secs_game = r.ticks / 60.0
         m = int(secs_game) // 60
         s = int(secs_game) % 60
-        lines.append(f"  {i:3d}. {n1} vs {n2}  ->  {outcome}  ({m}:{s:02d})")
+        lines.append(f"  {i:3d}. {match_desc}  ->  {outcome}  ({m}:{s:02d})")
 
     # Per-bot summary
     bot_stats: dict[str, dict[str, int]] = {}
     for r in results:
-        for aid in (r.ai1_id, r.ai2_id):
+        all_aids = [aid for aid, _ in r.participants] if r.participants else [r.ai1_id, r.ai2_id]
+        for aid in all_aids:
             if aid not in bot_stats:
                 bot_stats[aid] = {"wins": 0, "losses": 0, "draws": 0, "errors": 0}
         if r.winner == 0:
-            bot_stats[r.ai1_id]["errors"] += 1
-            bot_stats[r.ai2_id]["errors"] += 1
-        elif r.winner == 1:
-            bot_stats[r.ai1_id]["wins"] += 1
-            bot_stats[r.ai2_id]["losses"] += 1
-        elif r.winner == 2:
-            bot_stats[r.ai2_id]["wins"] += 1
-            bot_stats[r.ai1_id]["losses"] += 1
+            for aid in all_aids:
+                bot_stats[aid]["errors"] += 1
+        elif r.winner == -1:
+            for aid in all_aids:
+                bot_stats[aid]["draws"] += 1
         else:
-            bot_stats[r.ai1_id]["draws"] += 1
-            bot_stats[r.ai2_id]["draws"] += 1
+            winner_aids = {aid for aid, tid in r.participants if tid == r.winner} if r.participants else set()
+            for aid in all_aids:
+                if aid in winner_aids:
+                    bot_stats[aid]["wins"] += 1
+                else:
+                    bot_stats[aid]["losses"] += 1
 
     lines.append("")
     lines.append("=" * 60)
@@ -198,6 +211,22 @@ def write_tournament_summary(
     with open(filepath, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
     return filepath
+
+
+def _format_match_desc(
+    participants: list[tuple[str, int]],
+    ai_names: dict[str, str],
+) -> str:
+    """Human-readable match description from participants list."""
+    teams: dict[int, list[str]] = {}
+    for aid, tid in participants:
+        teams.setdefault(tid, []).append(ai_names.get(aid, aid))
+    sorted_teams = sorted(teams.items())
+    if len(sorted_teams) == 2 and all(len(v) == 1 for _, v in sorted_teams):
+        return f"{sorted_teams[0][1][0]} vs {sorted_teams[1][1][0]}"
+    if all(len(v) == 1 for _, v in sorted_teams):
+        return " | ".join(v[0] for _, v in sorted_teams)
+    return " vs ".join("+".join(v) for _, v in sorted_teams)
 
 
 class EloTracker:
@@ -285,6 +314,137 @@ class EloTracker:
 
         return (_K * (sa - ea), _K * (sb - eb))
 
+    def update_ffa(self, participants: list[tuple[str, int]], winner_team: int,
+                   contributions: dict[int, float] | None = None) -> None:
+        """Update ratings for a FFA match (each player = own team).
+
+        Uses pairwise Elo with K/(N-1) scaling.  Losers' penalties are
+        weighted by contribution rank: high-impact losers lose less.
+        """
+        n = len(participants)
+        if n < 2:
+            return
+        k = _K / max(n - 1, 1)
+
+        for aid, _ in participants:
+            self.ensure(aid)
+
+        if winner_team == -1:
+            # Draw — everyone gets 0.5 pairwise
+            for aid, _ in participants:
+                self.records[aid].draws += 1
+            for i, (ai, ti) in enumerate(participants):
+                for j, (aj, tj) in enumerate(participants):
+                    if j <= i:
+                        continue
+                    ra = self.records[ai].rating
+                    rb = self.records[aj].rating
+                    ea = 1.0 / (1.0 + 10.0 ** ((rb - ra) / 400.0))
+                    self.records[ai].rating += k * (0.5 - ea)
+                    self.records[aj].rating += k * (0.5 - (1.0 - ea))
+            return
+
+        winner_ids = [aid for aid, tid in participants if tid == winner_team]
+        losers = [(aid, tid) for aid, tid in participants if tid != winner_team]
+        n_losers = len(losers)
+
+        # Rank losers by contribution (descending) for penalty weighting
+        if contributions and n_losers > 1:
+            losers_sorted = sorted(losers, key=lambda x: contributions.get(x[1], 0), reverse=True)
+            loser_factors: dict[str, float] = {}
+            for rank, (aid, _) in enumerate(losers_sorted):
+                if n_losers <= 1:
+                    loser_factors[aid] = 1.0
+                else:
+                    # rank 0 = highest contrib → factor 0.5 (less loss)
+                    # rank n-1 = lowest contrib → factor 1.5 (more loss)
+                    loser_factors[aid] = 0.5 + rank * 1.0 / (n_losers - 1)
+        else:
+            loser_factors = {aid: 1.0 for aid, _ in losers}
+
+        # Pairwise: each winner vs each loser
+        for w_id in winner_ids:
+            for l_id, _ in losers:
+                ra = self.records[w_id].rating
+                rb = self.records[l_id].rating
+                ea = 1.0 / (1.0 + 10.0 ** ((rb - ra) / 400.0))
+                self.records[w_id].rating += k * (1.0 - ea)
+                self.records[l_id].rating += k * (0.0 - (1.0 - ea)) * loser_factors.get(l_id, 1.0)
+            self.records[w_id].wins += 1
+
+        for l_id, _ in losers:
+            self.records[l_id].losses += 1
+
+    def update_2v2(self, participants: list[tuple[str, int]], winner_team: int,
+                   contributions: dict[int, float] | None = None) -> None:
+        """Update ratings for a 2v2 match.
+
+        Team Elo = average of members.  Within each team, Elo change is
+        scaled by contribution: winners with high contribution gain more,
+        losers with high contribution lose less.
+        """
+        teams: dict[int, list[str]] = {}
+        for aid, tid in participants:
+            self.ensure(aid)
+            teams.setdefault(tid, []).append(aid)
+
+        team_ids = sorted(teams.keys())
+        if len(team_ids) != 2:
+            return
+
+        ta, tb = team_ids
+        avg_a = sum(self.records[a].rating for a in teams[ta]) / len(teams[ta])
+        avg_b = sum(self.records[a].rating for a in teams[tb]) / len(teams[tb])
+        ea = 1.0 / (1.0 + 10.0 ** ((avg_b - avg_a) / 400.0))
+
+        if winner_team == -1:
+            sa, sb = 0.5, 0.5
+            for aid in teams[ta] + teams[tb]:
+                self.records[aid].draws += 1
+        elif winner_team == ta:
+            sa, sb = 1.0, 0.0
+            for aid in teams[ta]:
+                self.records[aid].wins += 1
+            for aid in teams[tb]:
+                self.records[aid].losses += 1
+        elif winner_team == tb:
+            sa, sb = 0.0, 1.0
+            for aid in teams[tb]:
+                self.records[aid].wins += 1
+            for aid in teams[ta]:
+                self.records[aid].losses += 1
+        else:
+            return
+
+        base_a = _K * (sa - ea)
+        base_b = _K * (sb - (1.0 - ea))
+
+        # Distribute within teams, scaled by contribution
+        for tid, base_delta in [(ta, base_a), (tb, base_b)]:
+            members = teams[tid]
+            if len(members) == 1 or not contributions:
+                for aid in members:
+                    self.records[aid].rating += base_delta
+                continue
+            # Compute contribution shares
+            contribs = [max(contributions.get(tid, 0), 0) for _ in members]
+            # All members on same team share the same team-level contribution
+            # Use per-player contribution if available (future), else equal split
+            total_c = sum(contribs)
+            if total_c <= 0:
+                for aid in members:
+                    self.records[aid].rating += base_delta
+                continue
+            for i, aid in enumerate(members):
+                share = contribs[i] / total_c  # 0..1
+                is_winner = (base_delta > 0)
+                if is_winner:
+                    factor = 0.5 + share * len(members)  # rescaled
+                else:
+                    factor = 0.5 + (1.0 - share) * len(members)  # inverted for losers
+                # Normalize so average factor = 1.0
+                self.records[aid].rating += base_delta * factor
+
     def get_leaderboard(self) -> list[tuple[str, AIRecord]]:
         return sorted(self.records.items(), key=lambda t: t[1].rating, reverse=True)
 
@@ -294,8 +454,7 @@ class EloTracker:
 # ---------------------------------------------------------------------------
 
 def _run_arena_game(
-    ai1_id: str,
-    ai2_id: str,
+    participants: list[tuple[str, int]],
     match_index: int,
     map_width: int,
     map_height: int,
@@ -310,6 +469,20 @@ def _run_arena_game(
     _pg.init()
     _pg.display.set_mode((1, 1))
 
+    # Backward-compat: extract ai1/ai2 for legacy fields
+    ai1_id = participants[0][0] if participants else ""
+    ai2_id = participants[1][0] if len(participants) > 1 else ""
+    match_format = "1v1"
+    team_set = {tid for _, tid in participants}
+    if len(team_set) == 2:
+        team_sizes = {}
+        for _, tid in participants:
+            team_sizes[tid] = team_sizes.get(tid, 0) + 1
+        if any(v > 1 for v in team_sizes.values()):
+            match_format = "2v2"
+    elif len(team_set) > 2:
+        match_format = "ffa"
+
     try:
         from systems.ai import AIRegistry
         from systems.map_generator import DefaultMapGenerator
@@ -318,8 +491,7 @@ def _run_arena_game(
         registry = AIRegistry()
         registry.discover()
 
-        # Retry once if either bot failed to register (transient import errors)
-        needed = {ai1_id, ai2_id}
+        needed = {aid for aid, _ in participants}
         registered = {aid for aid, _ in registry.get_choices()}
         if not needed.issubset(registered):
             import time as _time
@@ -327,14 +499,23 @@ def _run_arena_game(
             registry = AIRegistry()
             registry.discover()
 
-        ai1 = registry.create(ai1_id)
-        ai2 = registry.create(ai2_id)
-        ai1_name = ai1.ai_name
-        ai2_name = ai2.ai_name
+        # Build player_ai and player_team from participants
+        player_ai = {}
+        player_team = {}
+        ai_ids_map = {}
+        ai_names_map = {}
+        for pid_idx, (aid, tid) in enumerate(participants):
+            pid = pid_idx + 1
+            ai_obj = registry.create(aid)
+            player_ai[pid] = ai_obj
+            player_team[pid] = tid
+            ai_ids_map[pid] = aid
+            ai_names_map[pid] = ai_obj.ai_name
 
         replay_config = {
-            "team_ai_ids": {1: ai1_id, 2: ai2_id},
-            "team_ai_names": {1: ai1_name, 2: ai2_name},
+            "player_ai_ids": ai_ids_map,
+            "player_ai_names": ai_names_map,
+            "player_team": player_team,
             "obstacle_count": list(obstacle_count),
             "player_name": "Arena",
         }
@@ -343,7 +524,8 @@ def _run_arena_game(
             width=map_width,
             height=map_height,
             map_generator=DefaultMapGenerator(obstacle_count=obstacle_count),
-            team_ai={1: ai1, 2: ai2},
+            player_ai=player_ai,
+            player_team=player_team,
             screen=_pg.display.get_surface(),
             clock=_pg.time.Clock(),
             replay_config=replay_config,
@@ -365,16 +547,33 @@ def _run_arena_game(
             step_ms_list = stats["step_ms"]
             avg_step_ms = sum(step_ms_list) / len(step_ms_list)
 
-        return MatchResult(ai1_id, ai2_id, winner=winner, ticks=ticks,
-                           avg_step_ms=avg_step_ms, replay_path=replay_path,
-                           match_index=match_index)
+        # Extract per-team contribution scores from stats
+        contributions: dict[int, float] = {}
+        if stats and "final" in stats:
+            for tid_str, team_final in stats["final"].items():
+                tid = int(tid_str)
+                contributions[tid] = (
+                    team_final.get("damage_dealt", 0)
+                    + team_final.get("units_killed", 0) * 50
+                    + team_final.get("metal_spots_captured", 0) * 100
+                )
+
+        return MatchResult(
+            ai1_id=ai1_id, ai2_id=ai2_id, winner=winner, ticks=ticks,
+            avg_step_ms=avg_step_ms, replay_path=replay_path,
+            match_index=match_index, match_format=match_format,
+            participants=list(participants), contributions=contributions,
+        )
 
     except Exception as exc:
         tb = traceback.format_exc()
-        error_log = _write_error_log(ai1_id, ai2_id, str(exc), tb)
-        return MatchResult(ai1_id, ai2_id, winner=0, error=str(exc),
-                           error_traceback=tb, error_log_path=error_log,
-                           match_index=match_index)
+        error_log = _write_error_log(participants, str(exc), tb)
+        return MatchResult(
+            ai1_id=ai1_id, ai2_id=ai2_id, winner=0, error=str(exc),
+            error_traceback=tb, error_log_path=error_log,
+            match_index=match_index, match_format=match_format,
+            participants=list(participants),
+        )
 
     finally:
         _pg.quit()
@@ -385,30 +584,30 @@ def _run_arena_game(
 # ---------------------------------------------------------------------------
 
 def _distribute_matchups(
-    matchups: list[tuple[str, str, int]], n_workers: int,
-) -> list[list[tuple[str, str, int]]]:
+    matchups: list[tuple[list[tuple[str, int]], int]], n_workers: int,
+) -> list[list[tuple[list[tuple[str, int]], int]]]:
     """Greedy bot-aware assignment of matchups to worker queues.
 
-    Each entry is (ai1_id, ai2_id, match_index).  Assigns each matchup to
-    the worker whose queue has the fewest matches involving either bot,
+    Each entry is (participants, match_index).  Assigns each matchup to
+    the worker whose queue has the fewest matches involving any participating bot,
     tiebreak by shortest queue.
     """
-    queues: list[list[tuple[str, str, int]]] = [[] for _ in range(n_workers)]
-    # Per-worker bot counts for fast lookup
+    queues: list[list[tuple[list[tuple[str, int]], int]]] = [[] for _ in range(n_workers)]
     bot_counts: list[dict[str, int]] = [{} for _ in range(n_workers)]
 
-    for ai1, ai2, idx in matchups:
+    for parts, idx in matchups:
+        aids = [aid for aid, _ in parts]
         best_w = 0
         best_score = (float("inf"), float("inf"))
         for w in range(n_workers):
-            overlap = bot_counts[w].get(ai1, 0) + bot_counts[w].get(ai2, 0)
+            overlap = sum(bot_counts[w].get(a, 0) for a in aids)
             score = (overlap, len(queues[w]))
             if score < best_score:
                 best_score = score
                 best_w = w
-        queues[best_w].append((ai1, ai2, idx))
-        bot_counts[best_w][ai1] = bot_counts[best_w].get(ai1, 0) + 1
-        bot_counts[best_w][ai2] = bot_counts[best_w].get(ai2, 0) + 1
+        queues[best_w].append((parts, idx))
+        for a in aids:
+            bot_counts[best_w][a] = bot_counts[best_w].get(a, 0) + 1
 
     return queues
 
@@ -422,10 +621,11 @@ class ArenaRunner:
         self._results: list[MatchResult] = []
         self._total: int = 0
         self._running: bool = False
-        self._matchups: list[tuple[str, str]] = []
+        self._matchups: list[list[tuple[str, int]]] = []  # each: [(ai_id, team_id), ...]
+        self._match_format: str = "1v1"
 
         # Slot-based state
-        self._worker_queues: list[list[tuple[str, str, int]]] = []
+        self._worker_queues: list[list[tuple[list[tuple[str, int]], int]]] = []
         self._active_futures: dict[int, tuple[Future, int]] = {}  # slot -> (future, match_index)
         self._n_workers: int = 0
 
@@ -448,24 +648,51 @@ class ArenaRunner:
         map_height: int = 600,
         obstacle_count: tuple[int, int] = (4, 8),
         max_ticks: int = 54000,
+        match_format: str = "1v1",
     ) -> None:
-        """Generate round-robin matchups, distribute to worker queues, start."""
+        """Generate matchups based on format, distribute to worker queues, start."""
         if self._running:
             return
 
-        # Build matchup list: each pair plays both sides × rounds
-        matchups: list[tuple[str, str]] = []
-        for i, a in enumerate(ai_ids):
-            for b in ai_ids[i + 1:]:
-                for _ in range(rounds):
-                    matchups.append((a, b))
-                    matchups.append((b, a))
+        self._match_format = match_format
+
+        # Build matchup list based on format
+        matchups: list[list[tuple[str, int]]] = []
+
+        if match_format == "ffa":
+            # All AIs in one match, each on their own team
+            base = [(aid, i + 1) for i, aid in enumerate(ai_ids)]
+            for _ in range(rounds):
+                matchups.append(list(base))
+
+        elif match_format == "2v2":
+            from itertools import combinations
+            # Generate all valid 2v2 team pairings
+            team_combos = list(combinations(range(len(ai_ids)), 2))
+            for i, combo_a in enumerate(team_combos):
+                for combo_b in team_combos[i + 1:]:
+                    if set(combo_a) & set(combo_b):
+                        continue  # skip if same AI on both teams
+                    parts = [
+                        (ai_ids[combo_a[0]], 1), (ai_ids[combo_a[1]], 1),
+                        (ai_ids[combo_b[0]], 2), (ai_ids[combo_b[1]], 2),
+                    ]
+                    for _ in range(rounds):
+                        matchups.append(parts)
+
+        else:
+            # 1v1 round-robin: each pair plays both sides × rounds
+            for i, a in enumerate(ai_ids):
+                for b in ai_ids[i + 1:]:
+                    for _ in range(rounds):
+                        matchups.append([(a, 1), (b, 2)])
+                        matchups.append([(b, 1), (a, 2)])
 
         self._matchups = matchups
         self._total = len(matchups)
         self._results = []
         self._running = True
-        self._n_workers = min(workers, self._total)
+        self._n_workers = min(workers, max(self._total, 1))
 
         # Store game params
         self._map_width = map_width
@@ -474,7 +701,7 @@ class ArenaRunner:
         self._max_ticks = max_ticks
 
         # Distribute into per-worker queues
-        indexed = [(a, b, idx) for idx, (a, b) in enumerate(matchups)]
+        indexed = [(parts, idx) for idx, parts in enumerate(matchups)]
         self._worker_queues = _distribute_matchups(indexed, self._n_workers)
         self._active_futures = {}
 
@@ -486,9 +713,9 @@ class ArenaRunner:
         """Pop next matchup from this worker's queue and submit it."""
         if not self._worker_queues[slot]:
             return
-        ai1, ai2, match_index = self._worker_queues[slot].pop(0)
+        participants, match_index = self._worker_queues[slot].pop(0)
         fut = self._executor.submit(
-            _run_arena_game, ai1, ai2, match_index,
+            _run_arena_game, participants, match_index,
             self._map_width, self._map_height,
             self._obstacle_count, self._max_ticks,
         )
@@ -500,7 +727,7 @@ class ArenaRunner:
             return TournamentProgress(
                 done=True, results=self._results,
                 total=self._total, completed=len(self._results),
-                matchups=self._matchups,
+                matchups=self._matchups, match_format=self._match_format,
             )
 
         # Check active futures for completion
@@ -510,9 +737,11 @@ class ArenaRunner:
                 try:
                     result = fut.result()
                 except Exception as exc:
-                    ai1, ai2 = self._matchups[match_index]
-                    result = MatchResult(ai1, ai2, winner=0, error=str(exc),
-                                         match_index=match_index)
+                    parts = self._matchups[match_index]
+                    result = MatchResult(
+                        winner=0, error=str(exc), match_index=match_index,
+                        participants=list(parts), match_format=self._match_format,
+                    )
                 self._results.append(result)
                 completed_slots.append(slot)
 
@@ -539,6 +768,7 @@ class ArenaRunner:
             done=done,
             matchups=self._matchups,
             active_match_indices=active_indices,
+            match_format=self._match_format,
         )
 
     def cancel(self) -> None:
