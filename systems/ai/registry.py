@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import inspect
 import os
+import pkgutil
 import sys
 from pathlib import Path
 from systems.ai.base import BaseAI
@@ -17,31 +18,69 @@ class AIRegistry:
 
     def discover(self) -> None:
         """Scan built-in and user AI directories."""
-        project_root = Path(__file__).resolve().parent.parent.parent
-        builtin_dir = project_root / "systems" / "ai"
-        user_dir = project_root / "ais"
+        # Built-in AIs (always available, works in frozen builds via pkgutil)
+        self._scan_package("systems.ai")
 
-        self._scan_dir(builtin_dir, "systems.ai")
-        if user_dir.is_dir():
-            self._scan_dir(user_dir, "ais")
+        # User AIs — try as a package first (frozen build), then scan loose files
+        self._scan_package("ais")
+        self._scan_loose_ais()
 
-    def _scan_dir(self, directory: Path, package: str) -> None:
-        for filepath in directory.glob("*.py"):
+    def _scan_package(self, package: str) -> None:
+        """Discover AI modules within an importable package using pkgutil."""
+        try:
+            pkg = importlib.import_module(package)
+        except ImportError:
+            return
+
+        pkg_path = getattr(pkg, "__path__", None)
+        if pkg_path is None:
+            return
+
+        for importer, module_name, is_pkg in pkgutil.iter_modules(pkg_path):
+            if module_name.startswith("_"):
+                continue
+            full_name = f"{package}.{module_name}"
+            self._try_load(full_name)
+
+    def _scan_loose_ais(self) -> None:
+        """Scan for .py files in an ais/ folder next to the exe (user-added AIs)."""
+        from core.paths import app_path
+        user_dir = Path(app_path("ais"))
+        if not user_dir.is_dir():
+            return
+
+        parent = str(user_dir.parent)
+        if parent not in sys.path:
+            sys.path.insert(0, parent)
+
+        for filepath in user_dir.glob("*.py"):
             if filepath.name.startswith("_"):
                 continue
-            module_name = f"{package}.{filepath.stem}"
-            try:
-                if module_name in sys.modules:
-                    module = sys.modules[module_name]
-                else:
-                    module = importlib.import_module(module_name)
-                for _, obj in inspect.getmembers(module, inspect.isclass):
-                    if (issubclass(obj, BaseAI)
-                            and obj is not BaseAI
-                            and getattr(obj, "ai_id", "")):
-                        self._registry[obj.ai_id] = obj
-            except Exception as exc:
-                self.errors.append(f"{filepath.name}: {exc}")
+            module_name = f"ais.{filepath.stem}"
+            # Skip if already loaded via _scan_package
+            if module_name in sys.modules:
+                self._register_from_module(sys.modules[module_name])
+                continue
+            self._try_load(module_name)
+
+    def _try_load(self, module_name: str) -> None:
+        """Import a module and register any BaseAI subclasses found."""
+        try:
+            if module_name in sys.modules:
+                module = sys.modules[module_name]
+            else:
+                module = importlib.import_module(module_name)
+            self._register_from_module(module)
+        except Exception as exc:
+            self.errors.append(f"{module_name}: {exc}")
+
+    def _register_from_module(self, module) -> None:
+        """Register all BaseAI subclasses in the given module."""
+        for _, obj in inspect.getmembers(module, inspect.isclass):
+            if (issubclass(obj, BaseAI)
+                    and obj is not BaseAI
+                    and getattr(obj, "ai_id", "")):
+                self._registry[obj.ai_id] = obj
 
     def get_choices(self) -> list[tuple[str, str]]:
         """Return (ai_id, ai_name) pairs sorted by name."""

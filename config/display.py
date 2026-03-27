@@ -4,7 +4,8 @@ import json
 import os
 import pygame
 
-_SETTINGS_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "display_settings.json")
+from core.paths import app_path
+_SETTINGS_PATH = app_path("display_settings.json")
 
 display_mode: str = "windowed_fullscreen"
 

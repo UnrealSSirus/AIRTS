@@ -502,8 +502,11 @@ class ReplayReader:
     # -- static helpers -----------------------------------------------------
 
     @staticmethod
-    def list_replays_iter(directory: str = "replays"):
+    def list_replays_iter(directory: str = ""):
         """Yield replay metadata dicts one at a time (newest first)."""
+        if not directory:
+            from core.paths import app_path
+            directory = app_path("replays")
         if not os.path.isdir(directory):
             return
 
@@ -536,7 +539,7 @@ class ReplayReader:
             }
 
     @staticmethod
-    def list_replays(directory: str = "replays") -> list[dict]:
+    def list_replays(directory: str = "") -> list[dict]:
         """Scan the replays directory and return metadata for each file."""
         return list(ReplayReader.list_replays_iter(directory))
 

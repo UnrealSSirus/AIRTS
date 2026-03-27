@@ -71,7 +71,8 @@ class TournamentProgress:
 # Elo Tracker
 # ---------------------------------------------------------------------------
 
-_ARENA_DIR = "ai_arena"
+from core.paths import app_path
+_ARENA_DIR = app_path("ai_arena")
 _RATINGS_PATH = os.path.join(_ARENA_DIR, "arena_ratings.json")
 _REPLAYS_DIR = os.path.join(_ARENA_DIR, "replays")
 _LOGS_DIR = os.path.join(_ARENA_DIR, "logs")

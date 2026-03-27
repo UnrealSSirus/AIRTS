@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any
 
 from config.settings import CC_HP
+from core.paths import app_path as _app_path
 
 
 class TeamStats:
@@ -232,7 +233,7 @@ class GameStats:
 
     # -- post-game log --------------------------------------------------------
 
-    _LOG_DIR = "logs"
+    _LOG_DIR = _app_path("logs")
 
     def save_summary_log(
         self,

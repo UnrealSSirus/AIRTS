@@ -20,8 +20,8 @@ from ui.theme import (
 _font_cache: dict[int, pygame.font.Font] = {}
 _icon_cache: dict[tuple[str, int], pygame.Surface | None] = {}
 
-_SPRITES_UI_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)),
-                               "sprites", "ui")
+from core.paths import asset_path
+_SPRITES_UI_DIR = asset_path("sprites", "ui")
 
 
 def _get_font(size: int) -> pygame.font.Font:

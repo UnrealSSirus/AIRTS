@@ -98,7 +98,7 @@ class Game:
         save_replay: bool = True,
         save_debug_summary: bool = False,
         step_timeout_ms: float = 0,
-        replay_output_dir: str = "replays",
+        replay_output_dir: str = "",
         screen_width: int | None = None,
         screen_height: int | None = None,
         is_multiplayer: bool = False,
@@ -168,6 +168,9 @@ class Game:
         self._save_debug_summary = save_debug_summary
         self.enable_t2 = enable_t2
         self._step_timeout_ms = step_timeout_ms
+        if not replay_output_dir:
+            from core.paths import app_path
+            replay_output_dir = app_path("replays")
         self._replay_output_dir = replay_output_dir
         self._player_name = player_name
         if not server_mode:
@@ -184,7 +187,8 @@ class Game:
 
         # -- sounds -----------------------------------------------------------
         if not headless:
-            _sounds_dir = os.path.join(os.path.dirname(__file__), "sounds")
+            from core.paths import asset_path
+            _sounds_dir = asset_path("sounds")
             self._sounds: dict[str, pygame.mixer.Sound] = {
                 "fast_laser": pygame.mixer.Sound(os.path.join(_sounds_dir, "fast_laser.mp3")),
                 "laser": pygame.mixer.Sound(os.path.join(_sounds_dir, "laser.mp3")),
