@@ -73,11 +73,8 @@ class Peri(BaseAI):
         self.num_medics = 0
         self.num_snipers = 0
 
-        self.mid = self.bounds[0] / 2
-
     def on_start(self) -> None:
         self.set_build("sniper")
-        self.region = (0, self.mid) if _pos(self.get_cc()).x < self.mid else (self.mid, self.bounds[0])
 
     def on_step(self, iteration: int) -> None:
         self.setup_step()
@@ -123,7 +120,14 @@ class Peri(BaseAI):
                 self.move_unit(unit, self.team_target.x, self.team_target.y)
 
     def in_our_half(self, pos:Vector2):
-        return self.region[0] <= pos.x <= self.region[1]
+        """Check if position is on our side using CC-relative distance."""
+        # Create a lightweight object with x, y for is_on_own_side
+        class _Pos:
+            __slots__ = ('x', 'y')
+            def __init__(self, x, y):
+                self.x = x
+                self.y = y
+        return self.is_on_own_side(_Pos(pos.x, pos.y))
 
     def get_metal_spot_flag(self, metal_spot:MetalSpot):
         pos = _pos(metal_spot)

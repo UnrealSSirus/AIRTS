@@ -18,7 +18,7 @@ from config.settings import (
     CC_HP, METAL_EXTRACTOR_HP,
     METAL_SPOT_CAPTURE_ARC_WIDTH,
     SELECTED_COLOR, SELECTION_FILL_COLOR, SELECTION_RECT_COLOR,
-    TEAM1_COLOR, TEAM2_COLOR, TEAM_COLORS,
+    TEAM_COLORS, PLAYER_COLORS,
     CAMERA_ZOOM_STEP, CAMERA_MAX_ZOOM,
     EDGE_PAN_MARGIN, EDGE_PAN_SPEED,
     GUI_BORDER, GUI_BTN_SELECTED, GUI_BTN_HOVER, GUI_BTN_NORMAL,
@@ -31,6 +31,7 @@ from config.unit_types import UNIT_TYPES, get_spawnable_types
 from ui.widgets import _get_font, Slider, Button
 import gui
 from gui_adapter import wrap_entities
+from systems.replay import normalize_cp
 
 _STATUS_COLOR = (180, 180, 200)
 _DISCONNECT_COLOR = (255, 100, 100)
@@ -78,6 +79,7 @@ class ClientGameScreen(BaseScreen):
         self._client = client
         self._is_local = is_local
         self._my_team: int = client.client_team
+        self._all_teams: set[int] = set(client.player_team.values()) if client.player_team else {1, 2}
         mw = client.map_width
         mh = client.map_height
 
@@ -248,8 +250,9 @@ class ClientGameScreen(BaseScreen):
                 self._phase = "explode"
                 self._anim_timer = 0.0
                 # Build fragments from losing CCs
-                losing_team = 3 - self._winner if self._winner > 0 else 0
-                self._init_fragments(losing_team)
+                losing_teams = self._all_teams - {self._winner} if self._winner > 0 else set()
+                for _lt in losing_teams:
+                    self._init_fragments(_lt)
 
             # Update explosion fragments
             if self._phase == "explode":
@@ -610,17 +613,23 @@ class ClientGameScreen(BaseScreen):
 
     def _build_result(self) -> ScreenResult:
         self._client.stop()
-        # Use opponent name from lobby_status if available, else fall back to host_name
-        opponent_name = self._client.opponent_name or self._client.host_name
+        # Build team_names from player_names / player_team, supporting N teams
+        team_names: dict[int, str] = {}
+        if self._player_names and self._client.player_team:
+            for pid, pname in self._player_names.items():
+                tm = self._client.player_team.get(pid, pid)
+                team_names[tm] = pname
+        if not team_names:
+            team_names[self._my_team] = self._client._player_name
+            opponent_name = self._client.opponent_name or self._client.host_name
+            for t in self._all_teams - {self._my_team}:
+                team_names[t] = opponent_name
         return ScreenResult("results", data={
             "winner": self._winner,
             "human_teams": {self._my_team},
             "stats": None,
             "replay_filepath": "",
-            "team_names": {
-                self._my_team: self._client._player_name,
-                3 - self._my_team: opponent_name,
-            },
+            "team_names": team_names,
         })
 
     # -- display click (group grid → center camera) --------------------------
@@ -734,7 +743,7 @@ class ClientGameScreen(BaseScreen):
             if pts:
                 scaled = [(cx + px * scale, cy + py * scale) for px, py in pts]
                 pygame.draw.polygon(ws, color, scaled)
-                outline = (150, 220, 255) if tm == 1 else (255, 140, 140)
+                outline = TEAM_COLORS.get(tm, PLAYER_COLORS[0])
                 pygame.draw.polygon(ws, outline, scaled, 2)
 
             # Glow ring
@@ -910,7 +919,7 @@ class ClientGameScreen(BaseScreen):
         font = _get_font(22)
 
         # Team indicator
-        team_color = TEAM1_COLOR if self._my_team == 1 else TEAM2_COLOR
+        team_color = TEAM_COLORS.get(self._my_team, PLAYER_COLORS[0])
         team_label = font.render(f"Team {self._my_team}", True, team_color)
         self.screen.blit(team_label, (10, 10))
 
@@ -1145,7 +1154,7 @@ class ClientGameScreen(BaseScreen):
         if pts:
             translated = [(x + px, y + py) for px, py in pts]
             pygame.draw.polygon(ws, c, translated)
-            outline = (150, 220, 255) if tm == 1 else (255, 140, 140)
+            outline = TEAM_COLORS.get(tm, PLAYER_COLORS[0])
             pygame.draw.polygon(ws, outline, translated, 2)
 
         # Spawn progress arc
@@ -1188,26 +1197,24 @@ class ClientGameScreen(BaseScreen):
 
         if ow is None:
             color = (255, 200, 60)
-        elif ow == 1:
-            color = (80, 140, 255)
         else:
-            color = (255, 80, 80)
+            color = TEAM_COLORS.get(ow, PLAYER_COLORS[0])
         pygame.draw.circle(ws, color, (int(x), int(y)), int(r))
 
-        if ow is None and abs(cp) > 0.01:
-            progress_color = (TEAM_COLORS.get(1, (80, 140, 255)) if cp > 0
-                              else TEAM_COLORS.get(2, (255, 80, 80)))
+        cp_dict = normalize_cp(cp)
+        if ow is None and cp_dict:
             arc_r = METAL_SPOT_CAPTURE_RADIUS + METAL_SPOT_CAPTURE_ARC_WIDTH
-            start_angle = math.pi / 2
-            end_angle = start_angle + cp * math.tau
-            if cp > 0:
-                a, b = start_angle, end_angle
-            else:
-                a, b = end_angle, start_angle
             rect = pygame.Rect(int(x - arc_r), int(y - arc_r),
                                int(arc_r * 2), int(arc_r * 2))
-            pygame.draw.arc(ws, progress_color, rect, a, b,
-                            int(METAL_SPOT_CAPTURE_ARC_WIDTH))
+            start_angle = math.pi / 2
+            for team_id, progress in cp_dict.items():
+                if progress < 0.01:
+                    continue
+                progress_color = TEAM_COLORS.get(team_id, PLAYER_COLORS[0])
+                end_angle = start_angle + progress * math.tau
+                pygame.draw.arc(ws, progress_color, rect,
+                                start_angle, end_angle,
+                                int(METAL_SPOT_CAPTURE_ARC_WIDTH))
 
     def _draw_metal_extractor(self, ent: dict) -> None:
         ws = self._world_surface
@@ -1230,7 +1237,7 @@ class ClientGameScreen(BaseScreen):
         # Reinforcement plating arcs
         rst = ent.get("rst", 0)
         if rst > 0:
-            arc_color = TEAM_COLORS.get(tm, TEAM1_COLOR)
+            arc_color = TEAM_COLORS.get(tm, PLAYER_COLORS[0])
             arc_r = METAL_SPOT_CAPTURE_RADIUS
             rect = pygame.Rect(x - arc_r, y - arc_r, arc_r * 2, arc_r * 2)
             arc_span = math.radians(87.5)
@@ -1289,10 +1296,10 @@ class ClientGameScreen(BaseScreen):
                 tm = pt.get(pid, pid)
                 names[tm] = pname
         if not names:
-            names = {
-                self._my_team: self._client._player_name,
-                3 - self._my_team: self._client.opponent_name or self._client.host_name,
-            }
+            names[self._my_team] = self._client._player_name
+            opponent_name = self._client.opponent_name or self._client.host_name
+            for t in self._all_teams - {self._my_team}:
+                names[t] = opponent_name
         for ent in entities:
             if ent.get("t") != "CC":
                 continue
@@ -1302,7 +1309,7 @@ class ClientGameScreen(BaseScreen):
             bp = ent.get("bp", 0)
             if bp > 0:
                 name = f"{name} (+{bp}%)"
-            team_color = TEAM1_COLOR if tm == 1 else TEAM2_COLOR
+            team_color = TEAM_COLORS.get(tm, PLAYER_COLORS[0])
             name_surf = font.render(name, True, team_color)
             nx = int(ent.get("x", 0)) - name_surf.get_width() // 2
             ny = int(ent.get("y", 0)) - 40

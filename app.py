@@ -310,10 +310,13 @@ class App:
         screen_w = self._screen.get_width()
         screen_h = self._screen.get_height()
 
+        # Build player_team from lobby data or default to 1v1
+        mp_player_team = data.get("player_team", {1: 1, 2: 2})
+
         replay_config = {
             "player_ai_ids": {},
             "player_ai_names": {},
-            "player_team": {1: 1, 2: 2},
+            "player_team": mp_player_team,
             "obstacle_count": list(obs),
             "player_name": host_name,
         }
@@ -325,7 +328,7 @@ class App:
             height=height,
             map_generator=DefaultMapGenerator(obstacle_count=obs),
             player_ai={},  # both teams human
-            player_team={1: 1, 2: 2},
+            player_team=mp_player_team,
             screen=self._screen,
             clock=self._clock,
             replay_config=replay_config,
@@ -377,7 +380,8 @@ class App:
             "human_teams": result.get("human_teams", set()),
             "stats": result.get("stats"),
             "replay_filepath": result.get("replay_filepath"),
-            "team_names": {1: host_name, 2: client_name},
+            "team_names": {t: (host_name if pid == 1 else client_name)
+                           for pid, t in mp_player_team.items()},
         })
 
     def _run_mp_client_game(self, data: dict) -> ScreenResult:

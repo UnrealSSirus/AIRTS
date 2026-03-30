@@ -23,6 +23,18 @@ RECORD_INTERVAL = 6
 # How many *recorded frames* between full keyframes
 KEYFRAME_INTERVAL = 60
 
+def normalize_cp(raw) -> dict[int, float]:
+    """Normalize capture_progress from either legacy float or new dict format."""
+    if isinstance(raw, dict):
+        return {int(k): float(v) for k, v in raw.items()}
+    if isinstance(raw, (int, float)):
+        if raw > 0.001:
+            return {1: float(raw)}
+        elif raw < -0.001:
+            return {2: abs(float(raw))}
+    return {}
+
+
 # Short type codes
 _TYPE_CODE = {
     "Unit": "U",
@@ -146,7 +158,7 @@ def _entity_visual(e: Entity) -> dict | None:
             "y": _q1(e.y),
             "r": e.radius,
             "ow": e.owner,
-            "cp": _q2(e.capture_progress),
+            "cp": {str(tid): _q2(val) for tid, val in e.capture_progress.items()} if e.capture_progress else {},
         }
     # Obstacles and other shapes are stored in map.obstacles, not frames
     return None
@@ -330,7 +342,7 @@ class ReplayRecorder:
         duration_seconds = round(duration_ticks / 60.0, 2)
 
         data = {
-            "version": 1,
+            "version": 2,
             "timestamp": datetime.now().isoformat(timespec="seconds"),
             "duration_ticks": duration_ticks,
             "duration_seconds": duration_seconds,

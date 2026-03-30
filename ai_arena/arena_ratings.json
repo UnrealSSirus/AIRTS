@@ -1,74 +1,74 @@
 {
   "coward_bot": {
-    "rating": 1010.4133409273157,
-    "wins": 9,
-    "losses": 8,
-    "draws": 5
+    "rating": 1027.9414266549704,
+    "wins": 28,
+    "losses": 24,
+    "draws": 21
   },
   "easy": {
-    "rating": 1024.6016802766053,
-    "wins": 7,
-    "losses": 7,
-    "draws": 8
+    "rating": 953.8651237916822,
+    "wins": 17,
+    "losses": 30,
+    "draws": 26
   },
   "example": {
-    "rating": 923.8764885275048,
-    "wins": 3,
-    "losses": 10,
-    "draws": 9
+    "rating": 900.6263465271462,
+    "wins": 12,
+    "losses": 42,
+    "draws": 19
   },
   "hard": {
-    "rating": 1040.9895951609917,
-    "wins": 8,
-    "losses": 4,
-    "draws": 10
+    "rating": 1091.4372453767278,
+    "wins": 32,
+    "losses": 7,
+    "draws": 34
   },
   "hard_bot_2": {
-    "rating": 1186.837486693192,
-    "wins": 19,
-    "losses": 1,
-    "draws": 2
+    "rating": 1174.272313015511,
+    "wins": 42,
+    "losses": 5,
+    "draws": 26
   },
   "kite_bot": {
-    "rating": 1121.8031169600013,
-    "wins": 15,
-    "losses": 2,
-    "draws": 5
-  },
-  "medium": {
-    "rating": 979.7765484679629,
-    "wins": 3,
-    "losses": 5,
+    "rating": 1267.2276134490821,
+    "wins": 55,
+    "losses": 4,
     "draws": 14
   },
-  "null": {
-    "rating": 942.546347480957,
-    "wins": 0,
-    "losses": 5,
-    "draws": 17
+  "medium": {
+    "rating": 1032.6491984947022,
+    "wins": 25,
+    "losses": 25,
+    "draws": 23
   },
-  "perigee": {
-    "rating": 878.0432650176505,
+  "null": {
+    "rating": 893.7035076810186,
+    "wins": 13,
+    "losses": 32,
+    "draws": 28
+  },
+  "Peri": {
+    "rating": 597.7335235350286,
     "wins": 0,
-    "losses": 12,
-    "draws": 10
+    "losses": 66,
+    "draws": 1
   },
   "terror_bot": {
-    "rating": 1053.4109530776327,
-    "wins": 10,
-    "losses": 3,
-    "draws": 9
+    "rating": 1067.6607160988297,
+    "wins": 36,
+    "losses": 16,
+    "draws": 21
   },
   "turtle": {
-    "rating": 958.4407480228524,
-    "wins": 1,
-    "losses": 5,
-    "draws": 16
+    "rating": 1058.745613430602,
+    "wins": 20,
+    "losses": 13,
+    "draws": 40
   },
   "wander": {
-    "rating": 879.2604293873335,
-    "wins": 1,
-    "losses": 14,
-    "draws": 7
+    "rating": 934.5040624062603,
+    "wins": 12,
+    "losses": 37,
+    "draws": 24
   }
 }

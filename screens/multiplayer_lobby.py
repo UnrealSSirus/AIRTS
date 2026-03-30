@@ -8,7 +8,7 @@ from ui.theme import (
     MENU_BG, CONTENT_TEXT, HEADING_FONT_SIZE, CONTENT_FONT_SIZE,
     BTN_WIDTH, BTN_HEIGHT,
 )
-from ui.widgets import Button, BackButton, TextInput, ToggleGroup, Slider, _get_font
+from ui.widgets import Button, BackButton, TextInput, ToggleGroup, Slider, Dropdown, _get_font
 from networking.protocol import DEFAULT_PORT
 from screens.create_lobby import _load_settings
 
@@ -89,6 +89,10 @@ class MultiplayerLobbyScreen(BaseScreen):
         self._host_obstacles = Slider(
             cx - 110, 290, 220, "Obstacles", 0, 20, 0, 1,
         )
+        self._host_team_choices = [(str(i), f"Team {i}") for i in range(1, 9)]
+        self._host_team_dropdown = Dropdown(
+            cx - 110, 330, 220, self._host_team_choices, 0,
+        )
         self._host_start_btn = Button(
             cx - BTN_WIDTH // 2, self.height - 80,
             BTN_WIDTH, BTN_HEIGHT, "Start Game",
@@ -96,7 +100,7 @@ class MultiplayerLobbyScreen(BaseScreen):
         self._host_obj = None
         self._host_status = "Waiting for player..."
         self._copy_ip_btn = Button(
-            cx - 45, 400, 90, 30, "Copy IP", font_size=18,
+            cx - 45, 410, 90, 30, "Copy IP", font_size=18,
         )
         self._copy_flash: float = 0.0  # seconds remaining for "Copied!" feedback
 
@@ -174,6 +178,7 @@ class MultiplayerLobbyScreen(BaseScreen):
                     self._host_name_input.handle_event(event)
                     self._host_map_size.handle_event(event)
                     self._host_obstacles.handle_event(event)
+                    self._host_team_dropdown.handle_event(event)
                     if self._copy_ip_btn.handle_event(event):
                         if self._host_obj:
                             self._copy_to_clipboard(self._host_obj.local_ip)
@@ -312,6 +317,10 @@ class MultiplayerLobbyScreen(BaseScreen):
         map_w, map_h = _MAP_SIZES[map_key]
         obs_val = self._host_obstacles.value
         host_name = self._host_name_input.text.strip() or "Host"
+        host_team = int(self._host_team_dropdown.value)
+        # Assign client to a different team (next team cyclically)
+        client_team = (host_team % 8) + 1 if host_team < 8 else 1
+        player_team = {1: host_team, 2: client_team}
         return ScreenResult("mp_host_game", data={
             "host": self._host_obj,
             "host_name": host_name,
@@ -319,6 +328,7 @@ class MultiplayerLobbyScreen(BaseScreen):
             "width": map_w,
             "height": map_h,
             "obstacle_count": (obs_val, obs_val),
+            "player_team": player_team,
         })
 
     def _build_join_result(self) -> ScreenResult:
@@ -381,18 +391,22 @@ class MultiplayerLobbyScreen(BaseScreen):
             self._host_map_size.draw(self.screen)
             self._host_obstacles.draw(self.screen)
 
+            team_label = font.render("Your Team:", True, CONTENT_TEXT)
+            self.screen.blit(team_label, (cx - 110, 318))
+            self._host_team_dropdown.draw(self.screen)
+
             # Status
             ready = self._host_obj and self._host_obj.client_ready
             color = _SUCCESS_COLOR if ready else _STATUS_COLOR
             status = font.render(self._host_status, True, color)
-            self.screen.blit(status, (cx - status.get_width() // 2, 370))
+            self.screen.blit(status, (cx - status.get_width() // 2, 380))
 
             # Copy IP button
             if self._host_obj:
                 self._copy_ip_btn.draw(self.screen)
                 if self._copy_flash > 0:
                     copied = font.render("Copied!", True, _SUCCESS_COLOR)
-                    self.screen.blit(copied, (cx - copied.get_width() // 2, 435))
+                    self.screen.blit(copied, (cx - copied.get_width() // 2, 445))
 
             if ready:
                 self._host_start_btn.draw(self.screen)

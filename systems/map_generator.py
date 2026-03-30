@@ -22,7 +22,7 @@ class BaseMapGenerator:
 
 
 class DefaultMapGenerator(BaseMapGenerator):
-    """Random obstacles in the center band, one command center per side."""
+    """Random obstacles, command centers placed by team layout."""
 
     def __init__(self, obstacle_count: tuple[int, int] = (4, 8),
                  metal_spots_per_side: int = 0):
@@ -31,8 +31,10 @@ class DefaultMapGenerator(BaseMapGenerator):
 
     def generate(self, width: int, height: int, player_team: dict | None = None) -> list[Entity]:
         entities: list[Entity] = []
-        self._place_command_centers(entities, width, height, player_team or {1: 1, 2: 2})
-        self._place_metal_spots(entities, width, height)
+        pt = player_team or {1: 1, 2: 2}
+        self._place_command_centers(entities, width, height, pt)
+        n_teams = len({t for t in pt.values()})
+        self._place_metal_spots(entities, width, height, n_teams)
         self._place_obstacles(entities, width, height)
         return entities
 
@@ -98,36 +100,105 @@ class DefaultMapGenerator(BaseMapGenerator):
             tid = player_team[pid]
             team_players.setdefault(tid, []).append(pid)
 
-        # Assign each team to a horizontal side
         sorted_teams = sorted(team_players)
-        n_teams = max(len(sorted_teams), 2)
-        # x positions: divide width into n_teams strips, inset 80px from each edge
-        inset = 80
-        if n_teams == 2:
-            side_xs = {sorted_teams[0]: inset, sorted_teams[1]: width - inset}
+        n_teams = len(sorted_teams)
+
+        if n_teams <= 2:
+            # Classic left/right placement
+            inset = 80
+            n_slots = max(n_teams, 2)
+            if n_slots == 2 and n_teams == 2:
+                side_xs = {sorted_teams[0]: inset, sorted_teams[1]: width - inset}
+            elif n_teams == 1:
+                side_xs = {sorted_teams[0]: inset}
+            else:
+                side_xs = {sorted_teams[0]: inset, sorted_teams[1]: width - inset}
+
+            for tid, pids in team_players.items():
+                sx = side_xs[tid]
+                m = len(pids)
+                for j, pid in enumerate(pids):
+                    sy = height * (j + 1) / (m + 1)
+                    cc = CommandCenter(sx, sy, team=tid, player_id=pid)
+                    cc._bounds = (width, height)
+                    cc._spawn_timer = CC_SPAWN_INTERVAL
+                    entities.append(cc)
         else:
-            side_xs = {
-                tid: inset + i * (width - 2 * inset) / (n_teams - 1)
-                for i, tid in enumerate(sorted_teams)
-            }
+            # Radial placement for 3+ teams
+            cx, cy = width / 2, height / 2
+            radius = min(width, height) * 0.35
+            for i, tid in enumerate(sorted_teams):
+                angle = 2 * math.pi * i / n_teams - math.pi / 2  # start at top
+                sx = cx + radius * math.cos(angle)
+                sy = cy + radius * math.sin(angle)
+                pids = team_players[tid]
+                m = len(pids)
+                for j, pid in enumerate(pids):
+                    # Offset multiple players on same team perpendicular to radial
+                    if m > 1:
+                        perp_angle = angle + math.pi / 2
+                        offset = (j - (m - 1) / 2) * 40
+                        px = sx + offset * math.cos(perp_angle)
+                        py = sy + offset * math.sin(perp_angle)
+                    else:
+                        px, py = sx, sy
+                    cc = CommandCenter(px, py, team=tid, player_id=pid)
+                    cc._bounds = (width, height)
+                    cc._spawn_timer = CC_SPAWN_INTERVAL
+                    entities.append(cc)
 
-        for tid, pids in team_players.items():
-            sx = side_xs[tid]
-            m = len(pids)
-            for j, pid in enumerate(pids):
-                # Distribute vertically: 1 player → center, N players → evenly spaced
-                sy = height * (j + 1) / (m + 1)
-                cc = CommandCenter(sx, sy, team=tid, player_id=pid)
-                cc._bounds = (width, height)
-                cc._spawn_timer = CC_SPAWN_INTERVAL
-                entities.append(cc)
-
-    def _place_metal_spots(self, entities: list[Entity], width: int, height: int):
+    def _place_metal_spots(self, entities: list[Entity], width: int, height: int,
+                           n_teams: int = 2):
         count = self._metal_spots_per_side if self._metal_spots_per_side > 0 else random.randint(2, 4)
-        for _ in range(count):
-            x = random.uniform(200 + METAL_SPOT_RADIUS, width // 2 - METAL_SPOT_RADIUS)
-            y = random.uniform(60 + METAL_SPOT_RADIUS, height // 2 - METAL_SPOT_RADIUS)
-            metal_spot = MetalSpot(x, y)
-            metal_spot_2 = MetalSpot(width - x, height - y)
-            entities.append(metal_spot)
-            entities.append(metal_spot_2)
+
+        if n_teams <= 2:
+            # Classic mirror: left half → right half
+            for _ in range(count):
+                x = random.uniform(200 + METAL_SPOT_RADIUS, width // 2 - METAL_SPOT_RADIUS)
+                y = random.uniform(60 + METAL_SPOT_RADIUS, height // 2 - METAL_SPOT_RADIUS)
+                metal_spot = MetalSpot(x, y)
+                metal_spot_2 = MetalSpot(width - x, height - y)
+                entities.append(metal_spot)
+                entities.append(metal_spot_2)
+        else:
+            # N-fold rotational symmetry around map center
+            cx, cy = width / 2, height / 2
+            min_dist = 60.0
+            max_dist = min(width, height) * 0.35 - 20
+            sector_angle = 2 * math.pi / n_teams
+            ccs = [e for e in entities if isinstance(e, CommandCenter)]
+
+            for _ in range(count):
+                # Pick random point in one sector (the first sector)
+                for _attempt in range(50):
+                    angle = random.uniform(0.1, sector_angle - 0.1)
+                    dist = random.uniform(min_dist, max_dist)
+                    valid = True
+                    # Check all N rotated copies are within bounds and away from CCs
+                    spots_to_add = []
+                    for k in range(n_teams):
+                        rot = sector_angle * k
+                        mx = cx + dist * math.cos(angle + rot)
+                        my = cy + dist * math.sin(angle + rot)
+                        # Bounds check with margin
+                        if mx < METAL_SPOT_RADIUS + 10 or mx > width - METAL_SPOT_RADIUS - 10:
+                            valid = False
+                            break
+                        if my < METAL_SPOT_RADIUS + 10 or my > height - METAL_SPOT_RADIUS - 10:
+                            valid = False
+                            break
+                        # CC exclusion
+                        if any(math.hypot(mx - cc.x, my - cc.y) < CC_OBSTACLE_EXCLUSION
+                               for cc in ccs):
+                            valid = False
+                            break
+                        # Overlap with existing metal spots
+                        if any(math.hypot(mx - e.x, my - e.y) < METAL_SPOT_RADIUS * 3
+                               for e in entities if isinstance(e, MetalSpot)):
+                            valid = False
+                            break
+                        spots_to_add.append(MetalSpot(mx, my))
+                    if valid and len(spots_to_add) == n_teams:
+                        for ms in spots_to_add:
+                            entities.append(ms)
+                        break

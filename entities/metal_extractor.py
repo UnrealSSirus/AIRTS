@@ -62,7 +62,7 @@ class MetalExtractor(Unit):
     def _finish_watch_tower(self):
         self.upgrade_state = "watch_tower"
         self.upgrade_timer = 0.0
-        color = PLAYER_COLORS[self.player_id - 1] if self.player_id >= 1 else PLAYER_COLORS[0]
+        color = PLAYER_COLORS[(self.player_id - 1) % len(PLAYER_COLORS)] if self.player_id >= 1 else PLAYER_COLORS[0]
         self.weapon = Weapon(
             name="Laser",
             damage=WATCH_TOWER_LASER_DAMAGE,

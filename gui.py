@@ -342,7 +342,7 @@ def _draw_group_grid(screen: pygame.Surface, r: pygame.Rect,
         cx, cy = box.centerx, box.centery
         stats = UNIT_TYPES.get(unit.unit_type, {})
         sym = stats.get("symbol")
-        base_color = PLAYER_COLORS[unit.player_id - 1]
+        base_color = PLAYER_COLORS[(unit.player_id - 1) % len(PLAYER_COLORS)]
 
         if _is_cc(unit):
             pts = hexagon_points(bs * 0.3)
@@ -387,7 +387,7 @@ def _draw_portrait(screen: pygame.Surface, r: pygame.Rect,
 
     stats = UNIT_TYPES.get(unit.unit_type, {})
     sym = stats.get("symbol")
-    base_color = PLAYER_COLORS[unit.player_id - 1]
+    base_color = PLAYER_COLORS[(unit.player_id - 1) % len(PLAYER_COLORS)]
 
     if _is_cc(unit):
         pts = hexagon_points(sz * 0.35)
