@@ -155,7 +155,10 @@ class GameHost:
         """Shut down the server and networking thread."""
         self._running = False
         if self._loop is not None:
-            self._loop.call_soon_threadsafe(self._loop.stop)
+            try:
+                self._loop.call_soon_threadsafe(self._loop.stop)
+            except RuntimeError:
+                pass  # event loop already closed
         if self._thread is not None:
             self._thread.join(timeout=2.0)
 
@@ -200,12 +203,19 @@ class GameHost:
         with self._clients_lock:
             for c in self._clients.values():
                 if c.connected.is_set():
-                    # Drop old unsent frames — keep only latest
+                    # Drop old stale STATE frames — keep only the latest.
+                    # Preserve non-state messages (game_start, game_over, etc.)
+                    # so they are never silently discarded.
+                    preserved = []
                     try:
                         while True:
-                            c.outbound.get_nowait()
+                            old = c.outbound.get_nowait()
+                            if old.get("msg") != "state":
+                                preserved.append(old)
                     except queue.Empty:
                         pass
+                    for item in preserved:
+                        c.outbound.put(item)
                     c.outbound.put(frame)
 
     def send_game_start(

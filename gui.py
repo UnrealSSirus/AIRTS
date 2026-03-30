@@ -171,13 +171,16 @@ def _research_btn_rects(ar: pygame.Rect) -> list[tuple[pygame.Rect, str]]:
 
 def draw_hud(screen: pygame.Surface, entities,
              width: int, height: int, hud_h: int,
-             enable_t2: bool = False, t2_upgrades: dict | None = None):
+             enable_t2: bool = False, t2_upgrades: dict | None = None,
+             camera=None, world_w: int = 0, world_h: int = 0,
+             obstacles=None):
     """Draw the full HUD bar at the bottom of the screen."""
     minimap, display, portrait, action = _hud_sections(width, height, hud_h)
     selected = _get_selected(entities)
     cc = get_selected_cc(entities)
 
-    _draw_minimap(screen, minimap)
+    _draw_minimap(screen, minimap, entities, camera, world_w, world_h,
+                  obstacles=obstacles)
     _draw_display(screen, display, selected, t2_upgrades=t2_upgrades)
     _draw_portrait(screen, portrait, selected)
     _draw_actions(screen, action, selected, cc, enable_t2=enable_t2, t2_upgrades=t2_upgrades)
@@ -188,11 +191,133 @@ def draw_hud(screen: pygame.Surface, entities,
                          (r.right - 1, r.top), (r.right - 1, r.bottom))
 
 
-def _draw_minimap(screen: pygame.Surface, r: pygame.Rect):
+def _draw_minimap(screen: pygame.Surface, r: pygame.Rect,
+                  entities=None, camera=None,
+                  world_w: int = 0, world_h: int = 0,
+                  obstacles=None):
     pygame.draw.rect(screen, _MINIMAP_BG, r)
-    t = _font(14).render("MINIMAP", True, (50, 50, 65))
-    screen.blit(t, (r.centerx - t.get_width() // 2,
-                    r.centery - t.get_height() // 2))
+
+    if not entities or world_w <= 0 or world_h <= 0:
+        t = _font(14).render("MINIMAP", True, (50, 50, 65))
+        screen.blit(t, (r.centerx - t.get_width() // 2,
+                        r.centery - t.get_height() // 2))
+        return
+
+    pad = 4
+    inner_w = r.width - pad * 2
+    inner_h = r.height - pad * 2
+    sx = inner_w / world_w
+    sy = inner_h / world_h
+    scale = min(sx, sy)
+    mw = world_w * scale
+    mh = world_h * scale
+    ox = r.left + pad + (inner_w - mw) / 2
+    oy = r.top + pad + (inner_h - mh) / 2
+
+    def w2m(wx: float, wy: float) -> tuple[int, int]:
+        return int(ox + wx * scale), int(oy + wy * scale)
+
+    # Clip drawing to minimap area
+    screen.set_clip(r)
+
+    from entities.metal_spot import MetalSpot
+    from entities.shapes import RectEntity, CircleEntity
+    from config.settings import TEAM_COLORS, OBSTACLE_COLOR
+
+    def _is_ms(e):
+        return isinstance(e, MetalSpot) or getattr(e, '_is_metal_spot', False)
+
+    def _is_me(e):
+        return isinstance(e, MetalExtractor) or getattr(e, '_is_metal_extractor', False)
+
+    def _is_unit(e):
+        return (isinstance(e, Unit) or getattr(e, '_is_unit', False)) and not getattr(e, 'is_building', False) and not _is_ms(e) and not _is_me(e) and not _is_cc(e)
+
+    def _is_cc(e):
+        return isinstance(e, CommandCenter) or getattr(e, '_is_command_center', False)
+
+    # Obstacles (grey) — from real entities or separate obstacle dicts
+    for e in entities:
+        if getattr(e, "obstacle", False) and getattr(e, "alive", False):
+            mx, my = w2m(e.x, e.y)
+            if isinstance(e, RectEntity):
+                hw = max(1, int(e.width * scale / 2))
+                hh = max(1, int(e.height * scale / 2))
+                pygame.draw.rect(screen, (80, 80, 80),
+                                 (mx - hw, my - hh, hw * 2, hh * 2))
+            else:
+                mr = max(1, int(getattr(e, "radius", 3) * scale))
+                pygame.draw.circle(screen, (80, 80, 80), (mx, my), mr)
+    # Obstacles from separate dict list (client-side)
+    if obstacles:
+        for obs in obstacles:
+            if obs.get("shape") == "rect":
+                ox2, oy2 = w2m(obs["x"], obs["y"])
+                ow = max(1, int(obs["w"] * scale))
+                oh = max(1, int(obs["h"] * scale))
+                pygame.draw.rect(screen, (80, 80, 80), (ox2, oy2, ow, oh))
+            elif obs.get("shape") == "circle":
+                ox2, oy2 = w2m(obs["x"], obs["y"])
+                orr = max(1, int(obs["r"] * scale))
+                pygame.draw.circle(screen, (80, 80, 80), (ox2, oy2), orr)
+
+    # Metal spots (small triangles)
+    for e in entities:
+        if _is_ms(e) and getattr(e, "alive", True):
+            mx, my = w2m(e.x, e.y)
+            s = max(2, int(4 * scale))
+            pts = [(mx, my - s), (mx - s, my + s), (mx + s, my + s)]
+            owner = getattr(e, "owner", None)
+            if owner is None:
+                color = (255, 255, 255)
+            else:
+                color = TEAM_COLORS.get(owner, (255, 255, 255))
+            pygame.draw.polygon(screen, color, pts)
+
+    # Metal extractors (colored triangles)
+    for e in entities:
+        if _is_me(e) and getattr(e, "alive", True):
+            mx, my = w2m(e.x, e.y)
+            s = max(2, int(5 * scale))
+            pts = [(mx, my - s), (mx - s, my + s), (mx + s, my + s)]
+            color = PLAYER_COLORS[(getattr(e, "team", 1) - 1) % len(PLAYER_COLORS)]
+            pygame.draw.polygon(screen, color, pts)
+
+    # Units (small circles)
+    for e in entities:
+        if _is_unit(e) and getattr(e, "alive", True):
+            mx, my = w2m(e.x, e.y)
+            mr = max(1, int(getattr(e, "radius", 5) * scale * 0.6))
+            pygame.draw.circle(screen, getattr(e, "color", (200, 200, 200)), (mx, my), mr)
+
+    # Command centers (small octagons)
+    for e in entities:
+        if _is_cc(e) and getattr(e, "alive", True):
+            mx, my = w2m(e.x, e.y)
+            s = max(3, int(20 * scale))
+            pts = []
+            for i in range(8):
+                a = math.tau * i / 8
+                pts.append((mx + int(s * math.cos(a)),
+                            my + int(s * math.sin(a))))
+            color = PLAYER_COLORS[(getattr(e, "player_id", 1) - 1) % len(PLAYER_COLORS)]
+            pygame.draw.polygon(screen, color, pts)
+
+    # Camera viewport rectangle
+    if camera is not None:
+        vp = camera.get_world_viewport_rect()
+        cx1, cy1 = w2m(max(0, vp.left), max(0, vp.top))
+        cx2, cy2 = w2m(min(world_w, vp.right), min(world_h, vp.bottom))
+        cam_w = max(1, cx2 - cx1)
+        cam_h = max(1, cy2 - cy1)
+        cam_rect = pygame.Rect(cx1, cy1, cam_w, cam_h)
+        # Clip to minimap world area
+        mini_world = pygame.Rect(int(ox), int(oy), int(mw), int(mh))
+        cam_rect = cam_rect.clip(mini_world)
+        if cam_rect.width > 0 and cam_rect.height > 0:
+            pygame.draw.rect(screen, (255, 255, 255), cam_rect, 1)
+
+    screen.set_clip(None)
 
 
 # ── unit / group display ────────────────────────────────────────────
@@ -680,6 +805,31 @@ def _draw_tooltip(screen: pygame.Surface, utype: str,
 
 
 # ── click handling ───────────────────────────────────────────────────
+
+def handle_minimap_click(mx: int, my: int,
+                         width: int, height: int, hud_h: int,
+                         world_w: int, world_h: int) -> tuple[float, float] | None:
+    """If (mx, my) is inside the minimap, return corresponding world coords."""
+    minimap, _, _, _ = _hud_sections(width, height, hud_h)
+    if not minimap.collidepoint(mx, my):
+        return None
+    if world_w <= 0 or world_h <= 0:
+        return None
+    pad = 4
+    inner_w = minimap.width - pad * 2
+    inner_h = minimap.height - pad * 2
+    sx = inner_w / world_w
+    sy = inner_h / world_h
+    scale = min(sx, sy)
+    mw = world_w * scale
+    mh = world_h * scale
+    ox = minimap.left + pad + (inner_w - mw) / 2
+    oy = minimap.top + pad + (inner_h - mh) / 2
+    wx = (mx - ox) / scale
+    wy = (my - oy) / scale
+    wx = max(0.0, min(float(world_w), wx))
+    wy = max(0.0, min(float(world_h), wy))
+    return (wx, wy)
 
 def handle_hud_click(entities, mx: int, my: int,
                      width: int, height: int, hud_h: int,

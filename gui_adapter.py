@@ -14,6 +14,7 @@ class _EntityProxy(SimpleNamespace):
     """Lightweight proxy that quacks like an entity for gui.py."""
     _is_command_center: bool = False
     _is_metal_extractor: bool = False
+    _is_metal_spot: bool = False
     _is_unit: bool = False
 
 
@@ -106,6 +107,10 @@ def _make_proxy(d: dict, selected_ids: set[int]) -> _EntityProxy:
         def get_spawn_bonus(self=p, _b=_meb):
             return _b / 100.0
         p.get_spawn_bonus = get_spawn_bonus
+
+    elif t == "MS":
+        p._is_metal_spot = True
+        p.owner = d.get("ow")
 
     elif t == "U":
         p._is_unit = True
