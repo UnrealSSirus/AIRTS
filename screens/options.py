@@ -40,6 +40,32 @@ class OptionsScreen(BaseScreen):
             btn_h=32,
         )
 
+        # Color mode toggle
+        color_idx = 0 if display_config.color_mode == "player" else 1
+        self._color_toggle = ToggleGroup(
+            self.width // 2 - 145, self.height // 2 + 110,
+            [
+                ("player", "Player Colors"),
+                ("team", "Team Colors"),
+            ],
+            selected_index=color_idx,
+            btn_w=140,
+            btn_h=32,
+        )
+
+        # Selection mode toggle
+        sel_idx = 0 if display_config.selection_mode == "rectangle" else 1
+        self._selection_toggle = ToggleGroup(
+            self.width // 2 - 145, self.height // 2 + 190,
+            [
+                ("rectangle", "Rectangle"),
+                ("circle", "Circle"),
+            ],
+            selected_index=sel_idx,
+            btn_w=140,
+            btn_h=32,
+        )
+
     def _apply_display_mode(self):
         mode = self._display_toggle.value
         display_config.set_mode(mode)
@@ -54,6 +80,10 @@ class OptionsScreen(BaseScreen):
         self._volume_slider.w = sl_w
         self._display_toggle.x = self.width // 2 - 145
         self._display_toggle.y = self.height // 2 + 30
+        self._color_toggle.x = self.width // 2 - 145
+        self._color_toggle.y = self.height // 2 + 110
+        self._selection_toggle.x = self.width // 2 - 145
+        self._selection_toggle.y = self.height // 2 + 190
 
     def run(self) -> ScreenResult:
         while True:
@@ -74,6 +104,12 @@ class OptionsScreen(BaseScreen):
                 if self._display_toggle.handle_event(event):
                     self._apply_display_mode()
 
+                if self._color_toggle.handle_event(event):
+                    display_config.set_color_mode(self._color_toggle.value)
+
+                if self._selection_toggle.handle_event(event):
+                    display_config.set_selection_mode(self._selection_toggle.value)
+
             self._draw()
 
     def _draw(self):
@@ -85,15 +121,25 @@ class OptionsScreen(BaseScreen):
         tx = self.width // 2 - title.get_width() // 2
         self.screen.blit(title, (tx, 80))
 
-        # Display mode label
+        # Labels
         label_font = _get_font(18)
         dm_label = label_font.render("Display Mode", True, CONTENT_TEXT)
         self.screen.blit(dm_label, (self.width // 2 - dm_label.get_width() // 2,
                                     self._display_toggle.y - 24))
 
+        cm_label = label_font.render("Color Mode", True, CONTENT_TEXT)
+        self.screen.blit(cm_label, (self.width // 2 - cm_label.get_width() // 2,
+                                    self._color_toggle.y - 24))
+
+        sm_label = label_font.render("Selection Mode", True, CONTENT_TEXT)
+        self.screen.blit(sm_label, (self.width // 2 - sm_label.get_width() // 2,
+                                    self._selection_toggle.y - 24))
+
         # Widgets
         self._back.draw(self.screen)
         self._volume_slider.draw(self.screen)
         self._display_toggle.draw(self.screen)
+        self._color_toggle.draw(self.screen)
+        self._selection_toggle.draw(self.screen)
 
         pygame.display.flip()

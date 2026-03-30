@@ -121,7 +121,6 @@ class DefaultMapGenerator(BaseMapGenerator):
                     sy = height * (j + 1) / (m + 1)
                     cc = CommandCenter(sx, sy, team=tid, player_id=pid)
                     cc._bounds = (width, height)
-                    cc._spawn_timer = CC_SPAWN_INTERVAL
                     entities.append(cc)
         else:
             # Radial placement for 3+ teams
@@ -144,7 +143,6 @@ class DefaultMapGenerator(BaseMapGenerator):
                         px, py = sx, sy
                     cc = CommandCenter(px, py, team=tid, player_id=pid)
                     cc._bounds = (width, height)
-                    cc._spawn_timer = CC_SPAWN_INTERVAL
                     entities.append(cc)
 
     def _place_metal_spots(self, entities: list[Entity], width: int, height: int,

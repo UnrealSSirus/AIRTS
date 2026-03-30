@@ -32,6 +32,7 @@ from ui.widgets import _get_font, Slider, Button
 import gui
 from gui_adapter import wrap_entities
 from systems.replay import normalize_cp
+from config import display as display_config
 
 _STATUS_COLOR = (180, 180, 200)
 _DISCONNECT_COLOR = (255, 100, 100)
@@ -119,7 +120,7 @@ class ClientGameScreen(BaseScreen):
         # Right-click path drawing
         self._rdragging = False
         self._rpath: list[tuple[float, float]] = []
-        self._PATH_MIN_DIST = 10.0
+        self._PATH_MIN_DIST = 2.5
 
         # Selection surface for circle draw
         self._selection_surface = pygame.Surface((mw, mh), pygame.SRCALPHA)
@@ -278,6 +279,55 @@ class ClientGameScreen(BaseScreen):
                         and self._is_local):
                     self._toggle_pause()
 
+                # Selection hotkeys
+                if event.type == pygame.KEYDOWN:
+                    mods = pygame.key.get_mods()
+                    if event.key == pygame.K_z and mods & pygame.KMOD_CTRL:
+                        # Select own CC
+                        self._selected_ids.clear()
+                        for ent in self._entities:
+                            if ent.get("t") == "CC" and ent.get("tm") == self._my_team:
+                                eid = ent.get("id")
+                                if eid is not None:
+                                    self._selected_ids.add(eid)
+                    elif event.key == pygame.K_TAB:
+                        # Select all army units
+                        self._selected_ids.clear()
+                        for ent in self._entities:
+                            if ent.get("t") == "U" and ent.get("tm") == self._my_team:
+                                eid = ent.get("id")
+                                if eid is not None:
+                                    self._selected_ids.add(eid)
+                    elif event.key == pygame.K_c and mods & pygame.KMOD_CTRL:
+                        # Expand selection to all matching unit types
+                        sel_types = set()
+                        for ent in self._entities:
+                            if (ent.get("t") == "U"
+                                    and ent.get("id") in self._selected_ids):
+                                sel_types.add(ent.get("ut"))
+                        if sel_types:
+                            for ent in self._entities:
+                                if (ent.get("t") == "U"
+                                        and ent.get("tm") == self._my_team
+                                        and ent.get("ut") in sel_types):
+                                    eid = ent.get("id")
+                                    if eid is not None:
+                                        self._selected_ids.add(eid)
+                    elif event.key == pygame.K_s:
+                        # Stop selected units
+                        stop_ids = [
+                            ent.get("id") for ent in self._entities
+                            if ent.get("t") == "U"
+                            and ent.get("id") in self._selected_ids
+                        ]
+                        if stop_ids:
+                            self._client.send_command(GameCommand(
+                                type="stop",
+                                player_id=self._my_team,
+                                tick=self._tick,
+                                data={"unit_ids": stop_ids},
+                            ))
+
                 # Header bar interactions (local controls)
                 if (event.type == pygame.MOUSEBUTTONDOWN and event.button == 1
                         and self._is_local and self._header_rect.collidepoint(event.pos)):
@@ -326,6 +376,15 @@ class ClientGameScreen(BaseScreen):
                 # Left click — HUD or selection
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     if self._hud_rect.collidepoint(event.pos):
+                        # Minimap click — center camera
+                        minimap_world = gui.handle_minimap_click(
+                            event.pos[0], event.pos[1],
+                            self.width, self.height, self._hud_h,
+                            self._map_w, self._map_h,
+                        )
+                        if minimap_world is not None:
+                            self._camera.center_on(*minimap_world)
+                            continue
                         self._handle_hud_click(event.pos)
                         # Check if a unit in the group grid was clicked
                         self._handle_display_click(event.pos)
@@ -432,29 +491,57 @@ class ClientGameScreen(BaseScreen):
                             if eid is not None:
                                 self._selected_ids.add(eid)
         else:
-            # Circle select (center = drag start, radius = distance to release)
-            # Army units take priority over buildings
+            # Drag select — army units take priority over buildings
             if not additive:
                 self._selected_ids.clear()
-            ccx, ccy = self._screen_to_world(self._drag_start)
-            w_ex, w_ey = self._screen_to_world(pos)
-            sr = math.hypot(w_ex - ccx, w_ey - ccy)
             army_ids: list[int] = []
             building_ids: list[int] = []
-            for ent in self._entities:
-                if ent.get("tm") != self._my_team:
-                    continue
-                t = ent.get("t")
-                if t not in ("U", "CC", "ME"):
-                    continue
-                ex, ey = ent.get("x", 0), ent.get("y", 0)
-                if math.hypot(ex - ccx, ey - ccy) <= sr:
-                    eid = ent.get("id")
-                    if eid is not None:
-                        if t == "U":
-                            army_ids.append(eid)
-                        else:
-                            building_ids.append(eid)
+
+            if display_config.selection_mode == "rectangle":
+                # Rectangle select: corners are drag_start and release pos
+                wx1, wy1 = self._screen_to_world(self._drag_start)
+                wx2, wy2 = self._screen_to_world(pos)
+                rx = min(wx1, wx2)
+                ry = min(wy1, wy2)
+                rw = abs(wx2 - wx1)
+                rh = abs(wy2 - wy1)
+                rcx, rcy = rx + rw / 2, ry + rh / 2
+                hw, hh = rw / 2, rh / 2
+                for ent in self._entities:
+                    if ent.get("tm") != self._my_team:
+                        continue
+                    t = ent.get("t")
+                    if t not in ("U", "CC", "ME"):
+                        continue
+                    ex, ey = ent.get("x", 0), ent.get("y", 0)
+                    er = ent.get("r", 5)
+                    if abs(ex - rcx) <= hw + er and abs(ey - rcy) <= hh + er:
+                        eid = ent.get("id")
+                        if eid is not None:
+                            if t == "U":
+                                army_ids.append(eid)
+                            else:
+                                building_ids.append(eid)
+            else:
+                # Circle select (center = drag start, radius = distance to release)
+                ccx, ccy = self._screen_to_world(self._drag_start)
+                w_ex, w_ey = self._screen_to_world(pos)
+                sr = math.hypot(w_ex - ccx, w_ey - ccy)
+                for ent in self._entities:
+                    if ent.get("tm") != self._my_team:
+                        continue
+                    t = ent.get("t")
+                    if t not in ("U", "CC", "ME"):
+                        continue
+                    ex, ey = ent.get("x", 0), ent.get("y", 0)
+                    if math.hypot(ex - ccx, ey - ccy) <= sr:
+                        eid = ent.get("id")
+                        if eid is not None:
+                            if t == "U":
+                                army_ids.append(eid)
+                            else:
+                                building_ids.append(eid)
+
             targets = army_ids if army_ids else building_ids
             for eid in targets:
                 self._selected_ids.add(eid)
@@ -808,7 +895,8 @@ class ClientGameScreen(BaseScreen):
                 if not is_warp_in:
                     self._draw_command_center(ent)
             elif t == "U":
-                self._draw_unit(ent)
+                if not is_warp_in:
+                    self._draw_unit(ent)
 
         # Warp-in animation overlays CCs with scale + glow
         if is_warp_in:
@@ -873,30 +961,48 @@ class ClientGameScreen(BaseScreen):
         # Team labels
         self._draw_team_labels(entities)
 
-        # Drag selection circle (center = drag start, radius = distance to cursor)
+        # Drag selection visual
         if self._dragging:
             sx, sy = self._drag_start
             ex, ey = self._drag_end
             screen_r = math.hypot(ex - sx, ey - sy)
             if screen_r >= 5:
-                wcx, wcy = self._screen_to_world(self._drag_start)
-                w_ex, w_ey = self._screen_to_world(self._drag_end)
-                wr = math.hypot(w_ex - wcx, w_ey - wcy)
                 self._selection_surface.fill((0, 0, 0, 0))
-                pygame.draw.circle(self._selection_surface, SELECTION_FILL_COLOR,
-                                   (int(wcx), int(wcy)), int(wr))
-                pygame.draw.circle(self._selection_surface, SELECTION_RECT_COLOR,
-                                   (int(wcx), int(wcy)), int(wr), 1)
+                if display_config.selection_mode == "rectangle":
+                    wcx1, wcy1 = self._screen_to_world(self._drag_start)
+                    wcx2, wcy2 = self._screen_to_world(self._drag_end)
+                    rx = min(wcx1, wcx2)
+                    ry = min(wcy1, wcy2)
+                    rw = abs(wcx2 - wcx1)
+                    rh = abs(wcy2 - wcy1)
+                    rect = pygame.Rect(int(rx), int(ry), int(rw), int(rh))
+                    pygame.draw.rect(self._selection_surface, SELECTION_FILL_COLOR, rect)
+                    pygame.draw.rect(self._selection_surface, SELECTION_RECT_COLOR, rect, 1)
+                else:
+                    wcx, wcy = self._screen_to_world(self._drag_start)
+                    w_ex, w_ey = self._screen_to_world(self._drag_end)
+                    wr = math.hypot(w_ex - wcx, w_ey - wcy)
+                    pygame.draw.circle(self._selection_surface, SELECTION_FILL_COLOR,
+                                       (int(wcx), int(wcy)), int(wr))
+                    pygame.draw.circle(self._selection_surface, SELECTION_RECT_COLOR,
+                                       (int(wcx), int(wcy)), int(wr), 1)
                 ws.blit(self._selection_surface, (0, 0))
 
-        # Right-click path with dots
+        # Right-click path with unit-count dots
         if self._rdragging and len(self._rpath) > 1:
+            path_color = (0, 200, 60)
             for i in range(1, len(self._rpath)):
                 ax, ay = self._rpath[i - 1]
                 bx, by = self._rpath[i]
-                pygame.draw.line(ws, (0, 200, 60), (ax, ay), (bx, by), 1)
-            for px, py in self._rpath:
-                pygame.draw.circle(ws, (0, 240, 80), (int(px), int(py)), 3)
+                pygame.draw.line(ws, path_color, (ax, ay), (bx, by), 1)
+            selected_count = sum(
+                1 for e in self._entities
+                if e.get("id") in self._selected_ids and e.get("t") == "U"
+            )
+            if selected_count > 0:
+                preview = self._resample_path(selected_count)
+                for px, py in preview:
+                    pygame.draw.circle(ws, path_color, (int(px), int(py)), 3)
 
         # Fog of war
         self._draw_fog(entities)
@@ -1003,6 +1109,10 @@ class ClientGameScreen(BaseScreen):
             self.width, self.height, self._hud_h,
             enable_t2=self._enable_t2,
             t2_upgrades=self._t2_upgrades,
+            camera=self._camera,
+            world_w=self._map_w,
+            world_h=self._map_h,
+            obstacles=self._obstacles,
         )
 
     # -- entity drawing (adapted from ReplayPlaybackScreen) -----------------
