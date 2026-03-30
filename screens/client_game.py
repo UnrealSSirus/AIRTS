@@ -172,7 +172,8 @@ class ClientGameScreen(BaseScreen):
         self._prev_laser_keys: set[tuple] = set()
 
         # Sound effects
-        _sounds_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "sounds")
+        from core.paths import asset_path
+        _sounds_dir = asset_path("sounds")
         self._sounds: dict[str, pygame.mixer.Sound] = {}
         try:
             self._sounds["fast_laser"] = pygame.mixer.Sound(os.path.join(_sounds_dir, "fast_laser.mp3"))

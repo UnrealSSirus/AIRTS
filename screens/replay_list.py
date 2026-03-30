@@ -302,7 +302,8 @@ class ReplayListScreen(BaseScreen):
 
     @staticmethod
     def _open_replays_folder():
-        folder = os.path.abspath("replays")
+        from core.paths import app_path
+        folder = app_path("replays")
         os.makedirs(folder, exist_ok=True)
         if sys.platform == "win32":
             os.startfile(folder)

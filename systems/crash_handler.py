@@ -5,7 +5,8 @@ import traceback
 from datetime import datetime
 
 
-_LOG_DIR = "logs"
+from core.paths import app_path
+_LOG_DIR = app_path("logs")
 
 
 def log_crash(exc: BaseException, context: str = "") -> str:

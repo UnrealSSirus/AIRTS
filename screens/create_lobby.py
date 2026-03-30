@@ -42,9 +42,8 @@ _MAP_SIZES = {
     "large":  (1800, 1200),
 }
 
-_SETTINGS_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(__file__)), "lobby_settings.json"
-)
+from core.paths import app_path
+_SETTINGS_PATH = app_path("lobby_settings.json")
 
 _MAX_SLOTS = 8
 _MIN_SLOTS = 2

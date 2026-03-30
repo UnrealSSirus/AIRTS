@@ -14,9 +14,10 @@ from screens.create_lobby import _load_settings
 
 
 def _load_env() -> dict[str, str]:
-    """Load key=value pairs from .env in the project root."""
+    """Load key=value pairs from .env next to the executable (or project root)."""
+    from core.paths import app_path
     env: dict[str, str] = {}
-    env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
+    env_path = app_path(".env")
     try:
         with open(env_path, "r") as f:
             for line in f:
@@ -123,15 +124,20 @@ class MultiplayerLobbyScreen(BaseScreen):
 
         # -- Play Online mode widgets --
         env = _load_env()
-        self._server_ip = env.get("SERVER_IP", "127.0.0.1")
+        self._server_ip = env.get("SERVER_IP", "0.0.0.0")
         self._server_port = int(env.get("SERVER_PORT", str(DEFAULT_PORT)))
+        self._needs_server_ip = self._server_ip in ("0.0.0.0", "")
+        self._online_ip_input = TextInput(
+            cx - 100, 200, 200,
+            placeholder="Server IP Address", max_len=45,
+        )
         self._online_name_input = TextInput(
-            cx - 100, 220, 200,
+            cx - 100, 270 if self._needs_server_ip else 220, 200,
             text=saved_name,
             placeholder="Your Name", max_len=24,
         )
         self._online_connect_btn = Button(
-            cx - BTN_WIDTH // 2, 290,
+            cx - BTN_WIDTH // 2, 340 if self._needs_server_ip else 290,
             BTN_WIDTH, BTN_HEIGHT, "Connect",
         )
         self._online_client = None
@@ -189,6 +195,8 @@ class MultiplayerLobbyScreen(BaseScreen):
                             self._start_client()
 
                 elif self._mode == "online":
+                    if self._needs_server_ip:
+                        self._online_ip_input.handle_event(event)
                     self._online_name_input.handle_event(event)
                     if self._online_connect_btn.handle_event(event):
                         if not self._online_client or self._online_error:
@@ -288,7 +296,13 @@ class MultiplayerLobbyScreen(BaseScreen):
         if self._online_client:
             self._online_client.stop()
             self._online_client = None
-        ip = self._server_ip
+        if self._needs_server_ip:
+            ip = self._sanitize_ip(self._online_ip_input.text)
+            if not ip:
+                self._online_error = "Please enter a server IP address"
+                return
+        else:
+            ip = self._server_ip
         port = self._server_port
         name = self._online_name_input.text.strip() or "Player"
         self._online_client = GameClient(
@@ -423,23 +437,30 @@ class MultiplayerLobbyScreen(BaseScreen):
             title = font_h.render("Play Online", True, CONTENT_TEXT)
             self.screen.blit(title, (cx - title.get_width() // 2, 50))
 
-            server_label = font.render(
-                f"Server: {self._server_ip}:{self._server_port}", True, _STATUS_COLOR,
-            )
-            self.screen.blit(server_label, (cx - server_label.get_width() // 2, 170))
+            if self._needs_server_ip:
+                label_ip = font.render("Server IP:", True, CONTENT_TEXT)
+                self.screen.blit(label_ip, (cx - 100, 182))
+                self._online_ip_input.draw(self.screen)
+            else:
+                server_label = font.render(
+                    f"Server: {self._server_ip}:{self._server_port}", True, _STATUS_COLOR,
+                )
+                self.screen.blit(server_label, (cx - server_label.get_width() // 2, 170))
 
+            y_name = 252 if self._needs_server_ip else 202
             label_name = font.render("Name:", True, CONTENT_TEXT)
-            self.screen.blit(label_name, (cx - 100, 202))
+            self.screen.blit(label_name, (cx - 100, y_name))
             self._online_name_input.draw(self.screen)
 
             if not self._online_client or self._online_error:
                 self._online_connect_btn.draw(self.screen)
 
+            status_y = 410 if self._needs_server_ip else 360
             if self._online_error:
                 err = font.render(self._online_error, True, _ERROR_COLOR)
-                self.screen.blit(err, (cx - err.get_width() // 2, 360))
+                self.screen.blit(err, (cx - err.get_width() // 2, status_y))
             elif self._online_status:
                 st = font.render(self._online_status, True, _SUCCESS_COLOR)
-                self.screen.blit(st, (cx - st.get_width() // 2, 360))
+                self.screen.blit(st, (cx - st.get_width() // 2, status_y))
 
         pygame.display.flip()
