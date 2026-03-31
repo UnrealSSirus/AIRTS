@@ -61,8 +61,10 @@ class App:
             if not choices:
                 choices = [("wander", "Wander AI")]
             server = data.get("server") if data else None
+            online_client = data.get("online_client") if data else None
             return CreateLobbyScreen(self._screen, self._clock, choices,
-                                     server=server).run()
+                                     server=server,
+                                     online_client=online_client).run()
 
         elif name == "game":
             return self._run_game(data)
@@ -288,6 +290,15 @@ class App:
                 self._screen, self._clock, client, is_local=True,
             ).run()
 
+            # If the game ended early (surrender/lobby), stop the server
+            # game thread and propagate the winner so stats are finalized.
+            game_obj = server._game
+            if game_obj is not None and game_obj.running:
+                client_winner = result.data.get("winner", 0)
+                if client_winner != 0 and game_obj._winner == 0:
+                    game_obj._winner = client_winner
+                game_obj.running = False
+
             # Wait for server to finish and collect its result
             server.wait_done(timeout=5.0)
             srv_result = server.result or {}
@@ -434,8 +445,14 @@ class App:
                                 data={"log_path": path, "context": "mp_client_game"})
 
         if result.next_screen == "results":
-            result.data["source_screen"] = "multiplayer_lobby"
-            result.data["lobby_data"] = {"client": client}
+            # Determine where to return: online games go to create_lobby,
+            # LAN join games go to multiplayer_lobby
+            if data.get("from_online_lobby"):
+                result.data["source_screen"] = "create_lobby"
+                result.data["lobby_data"] = {"online_client": client}
+            else:
+                result.data["source_screen"] = "multiplayer_lobby"
+                result.data["lobby_data"] = {"client": client}
         return result
 
     def _run_replay_playback(self, data: dict) -> ScreenResult:

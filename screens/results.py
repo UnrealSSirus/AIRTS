@@ -338,7 +338,7 @@ class ResultsScreen(BaseScreen):
 
     def _header_text(self) -> str:
         """Return header string: 'Draw', '{team_name} Victory', or 'Defeat'."""
-        if self._winner == -1:
+        if self._winner <= 0:
             return "Draw"
         winner_name = self._team_names.get(self._winner, f"Team {self._winner}")
         if self._human_teams and self._winner not in self._human_teams:

@@ -101,10 +101,11 @@ class CreateLobbyScreen(BaseScreen):
 
     def __init__(self, screen: pygame.Surface, clock: pygame.time.Clock,
                  ai_choices: list[tuple[str, str]],
-                 server=None):
+                 server=None, online_client=None):
         super().__init__(screen, clock)
         self._ai_choices = ai_choices
         self._server = server  # InternalServer, reused across games
+        self._online_client = online_client  # GameClient for online play
         self._full_choices: list[tuple[str, str]] = [_HUMAN_CHOICE] + list(ai_choices)
 
         # ── two-column layout ────────────────────────────────────────────────
@@ -324,11 +325,16 @@ class CreateLobbyScreen(BaseScreen):
                 if event.type == pygame.QUIT:
                     if self._server is not None:
                         self._server.stop()
+                    if self._online_client is not None:
+                        self._online_client.stop()
                     return ScreenResult("quit")
                 if self._back.handle_event(event):
                     if self._server is not None:
                         self._server.stop()
                         self._server = None
+                    if self._online_client is not None:
+                        self._online_client.stop()
+                        self._online_client = None
                     return ScreenResult("main_menu")
 
                 # Per-slot name inputs (human players only)
@@ -404,7 +410,17 @@ class CreateLobbyScreen(BaseScreen):
 
                 if self._start_btn.handle_event(event):
                     self._persist_settings()
-                    return self._build_result()
+                    if self._online_client is not None:
+                        self._send_online_start()
+                    else:
+                        return self._build_result()
+
+            # Online mode: check if server started the game
+            if self._online_client is not None and self._online_client.game_started:
+                return ScreenResult("mp_client_game", data={
+                    "client": self._online_client,
+                    "from_online_lobby": True,
+                })
 
             self._draw()
             self.clock.tick(60)
@@ -479,6 +495,44 @@ class CreateLobbyScreen(BaseScreen):
             "server":        self._server,
         })
 
+    def _send_online_start(self) -> None:
+        """Send game config to the remote server. The run() loop will detect
+        game_started and transition to mp_client_game."""
+        player_ai_ids: dict[int, str] = {}
+        player_team:   dict[int, int] = {}
+
+        # In online mode, the human player gets the client's assigned player_id.
+        # Bot slots get sequential IDs after that.
+        client = self._online_client
+        human_pid = client.player_id if client else 1
+        player_team[human_pid] = int(self._slots[0].team_dd.value) if self._slots else 1
+
+        next_pid = max(human_pid, 1) + 1
+        for i, slot in enumerate(self._slots):
+            if i == 0:
+                # First slot is the local human (already mapped above)
+                continue
+            pid = next_pid
+            next_pid += 1
+            player_team[pid] = int(slot.team_dd.value)
+            if slot.ai_dd.value != "human":
+                player_ai_ids[pid] = slot.ai_dd.value
+
+        map_w, map_h = _MAP_SIZES[self._map_size.value]
+
+        config = {
+            "player_ai_ids": {str(k): v for k, v in player_ai_ids.items()},
+            "player_team":   {str(k): v for k, v in player_team.items()},
+            "width":         map_w,
+            "height":        map_h,
+            "obstacle_count": self._sl_obstacles.value,
+            "metal_spots":   self._sl_metal_spots.value,
+            "time_limit":    self._sl_time_limit.value,
+            "enable_t2":     self._t2_cb.checked,
+        }
+
+        client.send_start_game(config)
+
     # ── rendering ─────────────────────────────────────────────────────────────
 
     def _draw(self):
@@ -492,7 +546,8 @@ class CreateLobbyScreen(BaseScreen):
         mx, my = pygame.mouse.get_pos()
 
         # ── title ────────────────────────────────────────────────────────────
-        title_surf = font_h.render("Create Lobby", True, CONTENT_TEXT)
+        title_text = "Online Lobby" if self._online_client else "Create Lobby"
+        title_surf = font_h.render(title_text, True, CONTENT_TEXT)
         self.screen.blit(title_surf,
                          (self.width // 2 - title_surf.get_width() // 2, _TITLE_Y))
 

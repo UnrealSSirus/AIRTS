@@ -63,6 +63,7 @@ class GameHost:
 
         # Cross-thread queues
         self._inbound_commands: queue.Queue[GameCommand] = queue.Queue()
+        self._start_game_queue: queue.Queue[dict] = queue.Queue()  # start_game requests from clients
 
         # Multi-client tracking: player_id → ClientConnection
         self._clients: dict[int, ClientConnection] = {}
@@ -71,6 +72,7 @@ class GameHost:
             self._next_player_id = first_player_id
         else:
             self._next_player_id = 2 if max_players == 1 else 1  # LAN: client=2; dedicated: start at 1
+        self._first_player_id = self._next_player_id
 
         self._running = True
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -164,6 +166,13 @@ class GameHost:
                 pass  # event loop already closed
         if self._thread is not None:
             self._thread.join(timeout=2.0)
+
+    def poll_start_game(self) -> dict | None:
+        """Non-blocking poll for a start_game config from a client."""
+        try:
+            return self._start_game_queue.get_nowait()
+        except queue.Empty:
+            return None
 
     # -- lobby settings API ---------------------------------------------------
 
@@ -286,17 +295,13 @@ class GameHost:
     def reset(self) -> None:
         """Reset to lobby state. Keeps TCP server and connections alive.
 
-        Connected clients remain ready (they don't need to re-join).
-        Only drain stale game state from queues.
+        For local games the old client has already disconnected, so we clear
+        the clients dict and reset the player-ID counter so the next client
+        gets the correct ID.
         """
+        self._next_player_id = self._first_player_id
         with self._clients_lock:
-            for c in self._clients.values():
-                # Drain stale outbound frames (state, game_over, etc.)
-                while not c.outbound.empty():
-                    try:
-                        c.outbound.get_nowait()
-                    except queue.Empty:
-                        break
+            self._clients.clear()
         # Drain stale inbound commands
         while True:
             try:
@@ -411,7 +416,8 @@ class GameHost:
                 break
             if msg is None:
                 break
-            if msg.get("msg") == "command":
+            msg_type = msg.get("msg")
+            if msg_type == "command":
                 cmd_data = msg.get("command", "")
                 try:
                     cmd = GameCommand.deserialize(cmd_data)
@@ -420,6 +426,8 @@ class GameHost:
                     self._inbound_commands.put(cmd)
                 except Exception:
                     pass
+            elif msg_type == "start_game":
+                self._start_game_queue.put(msg.get("config", {}))
 
     async def _send_loop(self, writer: asyncio.StreamWriter, outbound: queue.Queue) -> None:
         """Send queued state frames to a specific client."""

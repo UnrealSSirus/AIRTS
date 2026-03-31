@@ -31,6 +31,7 @@ class GameClient:
         # Cross-thread queues
         self._inbound: queue.Queue[dict] = queue.Queue()
         self._outbound_commands: queue.Queue[str] = queue.Queue()
+        self._outbound_messages: queue.Queue[dict] = queue.Queue()  # raw pre-formatted messages
 
         # Connection state
         self.player_id: int = 0  # assigned by host in lobby_info
@@ -48,6 +49,7 @@ class GameClient:
         self._running = True
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
+        self._tasks: list = []
 
         # Lobby status from server (for "Play Online" mode)
         self._lobby_status: dict | None = None
@@ -94,8 +96,11 @@ class GameClient:
     def stop(self) -> None:
         """Disconnect and shut down."""
         self._running = False
-        if self._loop is not None:
-            self._loop.call_soon_threadsafe(self._loop.stop)
+        # Cancel pending tasks so gather() returns promptly
+        if self._loop is not None and not self._loop.is_closed():
+            for task in self._tasks:
+                if not task.done():
+                    self._loop.call_soon_threadsafe(task.cancel)
         if self._thread is not None:
             self._thread.join(timeout=2.0)
 
@@ -110,6 +115,10 @@ class GameClient:
                 break
 
     # -- game-thread API (called from the main/pygame thread) ---------------
+
+    def send_start_game(self, config: dict) -> None:
+        """Send a start_game request to the server with game configuration."""
+        self._outbound_messages.put({"msg": "start_game", "config": config})
 
     def send_command(self, cmd: GameCommand) -> None:
         """Queue a command to send to the host."""
@@ -175,11 +184,15 @@ class GameClient:
             # Run send/recv concurrently
             recv_task = asyncio.ensure_future(self._recv_loop(reader))
             send_task = asyncio.ensure_future(self._send_loop(writer))
+            self._tasks = [recv_task, send_task]
             await asyncio.gather(recv_task, send_task)
 
+        except asyncio.CancelledError:
+            pass  # Expected during clean shutdown via stop()
         except (asyncio.IncompleteReadError, ConnectionError, OSError) as e:
             self._error = f"Disconnected: {e}"
         finally:
+            self._tasks = []
             self._connected.clear()
             writer.close()
 
@@ -226,17 +239,29 @@ class GameClient:
                 self._inbound.put(msg)
 
     async def _send_loop(self, writer: asyncio.StreamWriter) -> None:
-        """Send queued commands to the host."""
+        """Send queued commands and raw messages to the host."""
         while self._running:
+            sent = False
+            # Drain raw messages (start_game, etc.)
+            try:
+                msg = self._outbound_messages.get_nowait()
+                await send_message(writer, msg)
+                sent = True
+            except queue.Empty:
+                pass
+            except (ConnectionError, OSError):
+                break
+            # Drain game commands
             try:
                 cmd_raw = self._outbound_commands.get_nowait()
-            except queue.Empty:
-                await asyncio.sleep(0.005)
-                continue
-            try:
                 await send_message(writer, {
                     "msg": "command",
                     "command": cmd_raw,
                 })
+                sent = True
+            except queue.Empty:
+                pass
             except (ConnectionError, OSError):
                 break
+            if not sent:
+                await asyncio.sleep(0.005)
