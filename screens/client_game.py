@@ -315,10 +315,21 @@ class ClientGameScreen(BaseScreen):
                                 if self._winner == 0:
                                     other = self._all_teams - {self._my_team}
                                     self._winner = next(iter(other)) if other else -1
+                                # Tell the server so it can end the game
+                                self._client.send_command(GameCommand(
+                                    type="surrender",
+                                    player_id=self._my_team,
+                                    tick=self._tick,
+                                ))
                                 return self._build_result()
                             elif action == "lobby":
                                 if self._winner == 0:
                                     self._winner = -1
+                                self._client.send_command(GameCommand(
+                                    type="surrender",
+                                    player_id=self._my_team,
+                                    tick=self._tick,
+                                ))
                                 return self._build_result()
                             break
                     continue
@@ -747,9 +758,21 @@ class ClientGameScreen(BaseScreen):
     # -- result -------------------------------------------------------------
 
     def _build_result(self) -> ScreenResult:
+        stats = None
         if self._is_local:
             self._client.stop()
         else:
+            # Wait briefly for the server to process surrender and send stats
+            import time
+            deadline = time.monotonic() + 1.0
+            while time.monotonic() < deadline:
+                frame = self._client.poll_state()
+                if frame and frame.get("msg") == "game_over":
+                    break
+                if self._client.game_over_stats is not None:
+                    break
+                time.sleep(0.05)
+            stats = self._client.game_over_stats
             self._client.reset()
         # Build team_names from player_names / player_team, supporting N teams
         team_names: dict[int, str] = {}
@@ -765,9 +788,11 @@ class ClientGameScreen(BaseScreen):
         return ScreenResult("results", data={
             "winner": self._winner,
             "human_teams": {self._my_team},
-            "stats": None,
+            "stats": stats,
             "replay_filepath": "",
             "team_names": team_names,
+            "player_names": dict(self._player_names),
+            "player_team": dict(self._client.player_team) if self._client.player_team else {},
         })
 
     # -- display click (group grid → center camera) --------------------------

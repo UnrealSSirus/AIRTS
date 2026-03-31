@@ -59,22 +59,8 @@ class MultiplayerLobbyScreen(BaseScreen):
         # Load saved player name from lobby settings
         saved_name = _load_settings().get("player_name", "")
 
-        # Mode: not yet chosen (unless returning from a game)
-        self._mode: str = ""  # "", "host", "join", "online"
-
-        # -- Initial menu buttons --
-        self._host_btn = Button(
-            cx - BTN_WIDTH // 2, self.height // 2 - 80,
-            BTN_WIDTH, BTN_HEIGHT, "Host Game",
-        )
-        self._join_btn = Button(
-            cx - BTN_WIDTH // 2, self.height // 2 - 10,
-            BTN_WIDTH, BTN_HEIGHT, "Join Game",
-        )
-        self._online_btn = Button(
-            cx - BTN_WIDTH // 2, self.height // 2 + 60,
-            BTN_WIDTH, BTN_HEIGHT, "Play Online",
-        )
+        # Go straight to online mode (Host/Join removed)
+        self._mode: str = "online"
         self._back = BackButton()
 
         # -- Host mode widgets --
@@ -171,23 +157,10 @@ class MultiplayerLobbyScreen(BaseScreen):
                     return ScreenResult("main_menu")
 
                 if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-                    if self._mode:
-                        self._cleanup()
-                        self._mode = ""
-                        continue
-                    else:
-                        return ScreenResult("main_menu")
+                    self._cleanup()
+                    return ScreenResult("main_menu")
 
-                if self._mode == "":
-                    if self._host_btn.handle_event(event):
-                        self._mode = "host"
-                        self._start_host()
-                    elif self._join_btn.handle_event(event):
-                        self._mode = "join"
-                    elif self._online_btn.handle_event(event):
-                        self._mode = "online"
-
-                elif self._mode == "host":
+                if self._mode == "host":
                     self._host_name_input.handle_event(event)
                     self._host_map_size.handle_event(event)
                     self._host_obstacles.handle_event(event)
@@ -410,14 +383,7 @@ class MultiplayerLobbyScreen(BaseScreen):
         font = _get_font(CONTENT_FONT_SIZE)
         cx = self.width // 2
 
-        if self._mode == "":
-            title = font_h.render("Multiplayer", True, CONTENT_TEXT)
-            self.screen.blit(title, (cx - title.get_width() // 2, 80))
-            self._host_btn.draw(self.screen)
-            self._join_btn.draw(self.screen)
-            self._online_btn.draw(self.screen)
-
-        elif self._mode == "host":
+        if self._mode == "host":
             title = font_h.render("Host Game", True, CONTENT_TEXT)
             self.screen.blit(title, (cx - title.get_width() // 2, 50))
 

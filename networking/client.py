@@ -50,6 +50,7 @@ class GameClient:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._tasks: list = []
+        self.game_over_stats: dict | None = None
 
         # Lobby status from server (for "Play Online" mode)
         self._lobby_status: dict | None = None
@@ -107,6 +108,7 @@ class GameClient:
     def reset(self) -> None:
         """Reset for a new game, keeping the connection alive."""
         self._game_started.clear()
+        self.game_over_stats = None
         # Drain stale inbound frames
         while True:
             try:
@@ -235,7 +237,10 @@ class GameClient:
             elif msg_type == "return_to_lobby":
                 self._game_started.clear()
                 self._inbound.put(msg)
-            elif msg_type in ("state", "game_over"):
+            elif msg_type == "game_over":
+                self.game_over_stats = msg.get("stats")
+                self._inbound.put(msg)
+            elif msg_type == "state":
                 self._inbound.put(msg)
 
     async def _send_loop(self, writer: asyncio.StreamWriter) -> None:
