@@ -23,16 +23,16 @@ PLAYER_COLORS = [
     (220,  80, 160),  # P8 pink
 ]
 
-# Per-team colours used for team-scoped visuals (capture arcs, minimap borders)
+# Per-team colours — matches PLAYER_COLORS order so FFA (player==team) is consistent
 TEAM_COLORS = {
-    1: (80,  140, 255),  # T1 blue
-    2: (255,  80,  80),  # T2 red
-    3: (80,  220, 160),  # T3 teal
-    4: (255, 160,  60),  # T4 orange
-    5: (180,  80, 220),  # T5 purple
-    6: (80,  220, 220),  # T6 cyan
-    7: (220, 220,  80),  # T7 yellow
-    8: (220,  80, 160),  # T8 pink
+    1: (80,  140, 255),  # T1 blue     (= P1)
+    2: (80,  220, 160),  # T2 teal     (= P2)
+    3: (255,  80,  80),  # T3 red      (= P3)
+    4: (255, 160,  60),  # T4 orange   (= P4)
+    5: (180,  80, 220),  # T5 purple   (= P5)
+    6: (80,  220, 220),  # T6 cyan     (= P6)
+    7: (220, 220,  80),  # T7 yellow   (= P7)
+    8: (220,  80, 160),  # T8 pink     (= P8)
 }
 
 # Backward-compat aliases (metal_spot.py / metal_extractor.py still reference these)

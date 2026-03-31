@@ -143,6 +143,8 @@ class MetalExtractor(Unit):
         ]
         rotated_points = [p * complex(math.cos(self.rotation), math.sin(self.rotation)) for p in static_points]
         points = [(p.real + self.x, p.imag + self.y) for p in rotated_points]
+        color = PLAYER_COLORS[(self.team - 1) % len(PLAYER_COLORS)]
+        pygame.draw.polygon(surface, color, points)
         pygame.draw.polygon(surface, (0, 0, 0), points, 1)
 
     def _draw_watch_tower(self, surface: pygame.Surface):

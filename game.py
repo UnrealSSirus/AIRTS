@@ -15,16 +15,20 @@ from entities.laser import LaserFlash, SplashEffect
 from systems.combat import combat_step, PendingChain
 from systems.physics import clamp_units_to_bounds
 from systems.spawning import spawn_step
-from systems.selection import click_select, apply_circle_selection, select_all_of_type
+from systems.selection import (
+    click_select, apply_circle_selection, apply_rect_selection,
+    select_all_of_type, _deselect_all,
+)
 from systems.ai import BaseAI, WanderAI
 from systems.map_generator import BaseMapGenerator, DefaultMapGenerator
 from systems.capturing import capture_step
 from entities.metal_spot import MetalSpot
 from entities.metal_extractor import MetalExtractor
+from config import display as display_config
 from config.settings import (
     SELECTION_FILL_COLOR, SELECTION_RECT_COLOR,
     COMMAND_PATH_COLOR, COMMAND_DOT_COLOR, PATH_SAMPLE_MIN_DIST,
-    FIXED_DT, MAX_FRAME_DT, CC_RADIUS,
+    FIXED_DT, MAX_FRAME_DT, CC_RADIUS, CC_SPAWN_INTERVAL,
     PLAYER_COLORS, TEAM_COLORS, HEALTH_BAR_OFFSET,
     CAMERA_ZOOM_STEP, CAMERA_MAX_ZOOM,
     EDGE_PAN_MARGIN, EDGE_PAN_SPEED,
@@ -307,6 +311,8 @@ class Game:
             self._speed_slider = Slider(self._screen_width - 170, 10, 150, "Speed %", 25, 800, 100, 25)
             self._pause_btn = Button(self._screen_width - 210, 12, 32, 24, "||", icon="pause")
             self._reset_cam_btn = Button(70, 12, 50, 24, "Reset", font_size=18)
+            self._color_mode_btn = Button(130, 12, 60, 24, "Player", font_size=18)
+            self._color_mode: str = display.color_mode
             self._pause_font = pygame.font.SysFont(None, 48)
 
             # -- camera & world surface -------------------------------------------
@@ -325,6 +331,7 @@ class Game:
         self._phase: str = "warp_in"
         self._anim_timer: float = 0.0
         self._fragments: list[dict] = []
+        self._dying_units: list[dict] = []  # frozen draw data for staggered death
         if not server_mode:
             self._anim_surface = pygame.Surface((width, height), pygame.SRCALPHA)
             self._fog_surface = pygame.Surface((width, height), pygame.SRCALPHA)
@@ -551,17 +558,21 @@ class Game:
             return
         mx, my = pygame.mouse.get_pos()
         ga = self._game_area
-        if not ga.collidepoint(mx, my):
-            return
         dx = 0.0
         dy = 0.0
+        # Top edge pan uses absolute screen top so it doesn't interfere
+        # with the header controls (speed slider, etc.)
+        if my <= EDGE_PAN_MARGIN:
+            dy = EDGE_PAN_SPEED * dt
+        if not ga.collidepoint(mx, my):
+            if dy:
+                self._camera.pan(0, dy)
+            return
         if mx <= ga.left + EDGE_PAN_MARGIN:
             dx = EDGE_PAN_SPEED * dt
         elif mx >= ga.right - EDGE_PAN_MARGIN - 1:
             dx = -EDGE_PAN_SPEED * dt
-        if my <= ga.top + EDGE_PAN_MARGIN:
-            dy = EDGE_PAN_SPEED * dt
-        elif my >= ga.bottom - EDGE_PAN_MARGIN - 1:
+        if my >= ga.bottom - EDGE_PAN_MARGIN - 1:
             dy = -EDGE_PAN_SPEED * dt
         if dx or dy:
             self._camera.pan(dx, dy)
@@ -574,6 +585,19 @@ class Game:
             float(pos[0] - self._game_area.x),
             float(pos[1] - self._game_area.y),
         )
+
+    def _apply_color_mode(self) -> None:
+        """Recolor all units based on current color mode (player or team)."""
+        for e in self.entities:
+            if not isinstance(e, Unit):
+                continue
+            if self._color_mode == "team":
+                new_color = PLAYER_COLORS[(e.team - 1) % len(PLAYER_COLORS)]
+            else:
+                new_color = PLAYER_COLORS[(e.player_id - 1) % len(PLAYER_COLORS)]
+            e._base_color = new_color
+            if not e.selected:
+                e.color = new_color
 
     # -- events -------------------------------------------------------------
 
@@ -632,12 +656,76 @@ class Game:
                 self._camera.reset()
                 continue
 
+            if self._color_mode_btn.handle_event(event):
+                new_mode = "team" if self._color_mode == "player" else "player"
+                self._color_mode = new_mode
+                self._color_mode_btn.label = new_mode.title()
+                display_config.set_color_mode(new_mode)
+                self._apply_color_mode()
+                continue
+
             if not self._has_human:
                 continue
+
+            # -- Selection hotkeys -----------------------------------------
+            if event.type == pygame.KEYDOWN:
+                mods = pygame.key.get_mods()
+                if event.key == pygame.K_z and mods & pygame.KMOD_CTRL:
+                    # Select own CC
+                    _deselect_all(self.entities)
+                    for e in self.entities:
+                        if (isinstance(e, CommandCenter) and e.alive
+                                and e.team in self._selectable_teams):
+                            e.set_selected(True)
+                    continue
+                elif event.key == pygame.K_TAB:
+                    # Select all army units
+                    _deselect_all(self.entities)
+                    for e in self.entities:
+                        if (isinstance(e, Unit) and not e.is_building
+                                and e.selectable and e.alive):
+                            e.set_selected(True)
+                    continue
+                elif event.key == pygame.K_c and mods & pygame.KMOD_CTRL:
+                    # Expand selection to all matching unit types
+                    selected = [e for e in self.entities
+                                if isinstance(e, Unit) and e.selected and e.alive]
+                    types = {u.unit_type for u in selected}
+                    teams = {u.team for u in selected}
+                    if types:
+                        for e in self.entities:
+                            if (isinstance(e, Unit) and e.selectable and e.alive
+                                    and e.unit_type in types and e.team in teams):
+                                e.set_selected(True)
+                    continue
+                elif event.key == pygame.K_s:
+                    # Stop selected units
+                    selected = [e for e in self.entities
+                                if isinstance(e, Unit) and e.selected
+                                and not e.is_building and e.alive]
+                    if selected:
+                        by_player: dict[int, list[int]] = {}
+                        for u in selected:
+                            by_player.setdefault(u.player_id, []).append(u.entity_id)
+                        for pid, uids in by_player.items():
+                            self._command_queue.enqueue(GameCommand(
+                                type="stop", player_id=pid,
+                                tick=self._iteration, data={"unit_ids": uids},
+                            ))
+                    continue
 
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 # HUD click — consume all clicks in the HUD area
                 if self._hud_rect.collidepoint(event.pos):
+                    # Minimap click — center camera
+                    minimap_world = gui.handle_minimap_click(
+                        event.pos[0], event.pos[1],
+                        self._screen_width, self._screen_height, self._hud_h,
+                        self.width, self.height,
+                    )
+                    if minimap_world is not None:
+                        self._camera.center_on(*minimap_world)
+                        continue
                     hud_result = gui.handle_hud_click(
                         self.entities, event.pos[0], event.pos[1],
                         self._screen_width, self._screen_height, self._hud_h,
@@ -691,11 +779,21 @@ class Game:
                     self._last_click_time = now
                     self._last_click_pos = event.pos  # screen space for distance check
                 else:
-                    cx, cy = self._selection_center()
-                    apply_circle_selection(
-                        self.entities, cx, cy, sr,
-                        additive=bool(shift),
-                    )
+                    if display_config.selection_mode == "rectangle":
+                        x1, y1 = self._drag_start
+                        x2, y2 = self._drag_end
+                        apply_rect_selection(
+                            self.entities, x1, y1, x2, y2,
+                            additive=bool(shift),
+                            own_player_ids=self._selectable_players,
+                        )
+                    else:
+                        cx, cy = self._selection_center()
+                        apply_circle_selection(
+                            self.entities, cx, cy, sr,
+                            additive=bool(shift),
+                            own_player_ids=self._selectable_players,
+                        )
                 self._dragging = False
 
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
@@ -999,6 +1097,11 @@ class Game:
                 if isinstance(e, Unit):
                     self._quadfield.add_unit(e)
                     self.team_units.setdefault(e.team, []).append(e)
+                    # Apply color mode to newly spawned units
+                    if hasattr(self, '_color_mode') and self._color_mode == "team":
+                        new_color = PLAYER_COLORS[(e.team - 1) % len(PLAYER_COLORS)]
+                        e._base_color = new_color
+                        e.color = new_color
         self._stats.record_subsystem("spawn", (_perf() - _t) * 1000)
 
         _t = _perf()
@@ -1117,6 +1220,10 @@ class Game:
             losing_teams = self.all_teams - surviving_teams
             for t in losing_teams:
                 self._init_fragments(t)
+                self._init_unit_death(t)
+            # Prune dead units so they don't render during explode
+            self.entities = [e for e in self.entities if e.alive]
+            self.units = [u for u in self.units if u.alive]
 
         # Tick limit — score-based tiebreaker, then draw if still tied
         if self._max_ticks > 0 and self._iteration >= self._max_ticks and self._winner == 0:
@@ -1306,12 +1413,20 @@ class Game:
         if self._dragging:
             sr = self._selection_radius()
             if sr >= 5:
-                cx, cy = self._selection_center()
                 self._selection_surface.fill((0, 0, 0, 0))
-                pygame.draw.circle(self._selection_surface, SELECTION_FILL_COLOR,
-                                   (int(cx), int(cy)), int(sr))
-                pygame.draw.circle(self._selection_surface, SELECTION_RECT_COLOR,
-                                   (int(cx), int(cy)), int(sr), 1)
+                if display_config.selection_mode == "rectangle":
+                    x1, y1 = self._drag_start
+                    x2, y2 = self._drag_end
+                    rect = pygame.Rect(min(x1, x2), min(y1, y2),
+                                       abs(x2 - x1), abs(y2 - y1))
+                    pygame.draw.rect(self._selection_surface, SELECTION_FILL_COLOR, rect)
+                    pygame.draw.rect(self._selection_surface, SELECTION_RECT_COLOR, rect, 1)
+                else:
+                    cx, cy = self._selection_center()
+                    pygame.draw.circle(self._selection_surface, SELECTION_FILL_COLOR,
+                                       (int(cx), int(cy)), int(sr))
+                    pygame.draw.circle(self._selection_surface, SELECTION_RECT_COLOR,
+                                       (int(cx), int(cy)), int(sr), 1)
                 ws.blit(self._selection_surface, (0, 0))
 
         if self._rdragging and len(self._rpath) >= 2:
@@ -1323,7 +1438,7 @@ class Game:
             if selected_count > 0:
                 preview = self._resample_path(selected_count)
                 for px, py in preview:
-                    pygame.draw.circle(ws, COMMAND_DOT_COLOR, (int(px), int(py)), 4, 1)
+                    pygame.draw.circle(ws, COMMAND_PATH_COLOR, (int(px), int(py)), 5)
 
         # -- Composite to screen --
         self.screen.fill((0, 0, 0))
@@ -1337,6 +1452,7 @@ class Game:
         # Header widgets
         self._pause_btn.draw(self.screen)
         self._reset_cam_btn.draw(self.screen)
+        self._color_mode_btn.draw(self.screen)
         self._speed_slider.draw(self.screen)
         fps_val = self.clock.get_fps()
         fps_surf = self._fps_font.render(f"FPS: {fps_val:.0f}", True, (200, 200, 200))
@@ -1368,7 +1484,8 @@ class Game:
         if self._has_human:
             gui.draw_hud(self.screen, self.entities,
                          self._screen_width, self._screen_height, self._hud_h,
-                         enable_t2=self.enable_t2, t2_upgrades=self._t2_upgrades)
+                         enable_t2=self.enable_t2, t2_upgrades=self._t2_upgrades,
+                         camera=self._camera, world_w=self.width, world_h=self.height)
 
         # Paused overlay (centered on game area)
         if self._paused:
@@ -1502,9 +1619,52 @@ class Game:
                 "color": color,
             })
 
+    def _init_unit_death(self, team: int):
+        """Create staggered shard fragments for all units on the losing team."""
+        team_units = [u for u in self.units
+                      if u.team == team and u.alive and not isinstance(u, CommandCenter)]
+        random.shuffle(team_units)
+
+        for u in team_units:
+            delay = random.uniform(0.3, 2.5)
+            # Store draw data so we can draw the unit frozen until it explodes
+            self._dying_units.append({
+                "x": u.x, "y": u.y,
+                "radius": u.radius,
+                "color": u._base_color,
+                "delay": delay,
+            })
+            # Create 4-6 triangular shards from the circle
+            n_shards = random.randint(4, 6)
+            for j in range(n_shards):
+                a1 = math.tau * j / n_shards
+                a2 = math.tau * (j + 1) / n_shards
+                tri = [
+                    (0.0, 0.0),
+                    (u.radius * math.cos(a1), u.radius * math.sin(a1)),
+                    (u.radius * math.cos(a2), u.radius * math.sin(a2)),
+                ]
+                out_x = math.cos((a1 + a2) / 2)
+                out_y = math.sin((a1 + a2) / 2)
+                speed = random.uniform(30, 80)
+                self._fragments.append({
+                    "points": tri,
+                    "cx": u.x, "cy": u.y,
+                    "vx": out_x * speed + random.uniform(-15, 15),
+                    "vy": out_y * speed + random.uniform(-15, 15),
+                    "angle": 0.0,
+                    "rot_speed": random.uniform(-5, 5),
+                    "color": u._base_color,
+                    "delay": delay,
+                })
+            # Kill the unit
+            u.alive = False
+
     def _update_fragments(self, dt: float):
         """Move and rotate explosion fragments."""
         for frag in self._fragments:
+            if frag.get("delay", 0) > self._anim_timer:
+                continue  # not yet started
             frag["cx"] += frag["vx"] * dt
             frag["cy"] += frag["vy"] * dt
             frag["angle"] += frag["rot_speed"] * dt
@@ -1515,16 +1675,28 @@ class Game:
         # Draw all surviving entities normally
         for entity in self.entities:
             entity.draw(ws)
+
+        # Draw dying units that haven't exploded yet (frozen in place)
+        for du in self._dying_units:
+            if self._anim_timer < du["delay"]:
+                pygame.draw.circle(ws, du["color"],
+                                   (int(du["x"]), int(du["y"])), du["radius"])
+
         self._draw_fog()
 
-        # Draw explosion fragments
-        t = min(self._anim_timer / 3.0, 1.0)
-        alpha = int(255 * (1.0 - t))
-        if alpha <= 0:
-            return
-
+        # Draw explosion fragments (with per-fragment delay and fade)
         self._anim_surface.fill((0, 0, 0, 0))
+        any_drawn = False
         for frag in self._fragments:
+            delay = frag.get("delay", 0.0)
+            if self._anim_timer < delay:
+                continue  # not yet started
+            elapsed = self._anim_timer - delay
+            t = min(elapsed / 2.0, 1.0)  # fade over 2 seconds after delay
+            alpha = int(255 * (1.0 - t))
+            if alpha <= 0:
+                continue
+
             cos_a = math.cos(frag["angle"])
             sin_a = math.sin(frag["angle"])
             rotated = []
@@ -1535,8 +1707,10 @@ class Game:
 
             frag_color = (*frag["color"][:3], alpha)
             pygame.draw.polygon(self._anim_surface, frag_color, rotated)
+            any_drawn = True
 
-        ws.blit(self._anim_surface, (0, 0))
+        if any_drawn:
+            ws.blit(self._anim_surface, (0, 0))
 
     # -- headless snapshot ----------------------------------------------------
 
@@ -1614,6 +1788,8 @@ class Game:
 
         if self._headless:
             self._phase = "playing"  # skip warp_in
+            for cc in self.command_centers:
+                cc._spawn_timer = CC_SPAWN_INTERVAL
             headless_font = pygame.font.SysFont(None, 28)
             self._headless_snap_font = pygame.font.SysFont(None, 18)
             self._headless_snap_surf: pygame.Surface | None = None
@@ -1659,6 +1835,9 @@ class Game:
                     self._anim_timer += real_dt
                     if self._anim_timer >= 3.0:
                         self._phase = "playing"
+                        # CCs ready to spawn on first tick after warp-in
+                        for cc in self.command_centers:
+                            cc._spawn_timer = CC_SPAWN_INTERVAL
                     self.render()
 
                 elif self._phase == "playing":
@@ -1678,7 +1857,7 @@ class Game:
                 elif self._phase == "explode":
                     self._anim_timer += real_dt
                     self._update_fragments(real_dt)
-                    if self._anim_timer >= 3.0:
+                    if self._anim_timer >= 4.5:
                         self.running = False
                     self.render()
 
@@ -1758,6 +1937,25 @@ class Game:
 
         self.running = True
         self._phase = "playing"
+
+        # -- Warp-in delay: wait 3s so client can show the warp-in
+        # animation.  Accept commands (so player can pick spawn type)
+        # but don't step the simulation.
+        warp_end = time.perf_counter() + 3.0
+        while self.running and time.perf_counter() < warp_end:
+            if pre_step:
+                pre_step()
+            # Apply commands (set_spawn_type, set_speed, etc.)
+            for cmd in self._command_queue.drain(self._iteration + 999999):
+                self._apply_command(cmd)
+            if post_step:
+                post_step(self._iteration, self.entities,
+                          self.laser_flashes, self._winner)
+            time.sleep(0.016)
+
+        # Set CCs ready to spawn on first tick
+        for cc in self.command_centers:
+            cc._spawn_timer = CC_SPAWN_INTERVAL
 
         tick_interval = FIXED_DT / 1.0  # ~16.67ms at 60 ticks/sec
         next_tick = time.perf_counter()

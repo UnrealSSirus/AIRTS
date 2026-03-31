@@ -1,8 +1,67 @@
-"""Selection system: circle-drag and click-to-select."""
+"""Selection system: circle-drag, rectangle-drag, and click-to-select."""
 from __future__ import annotations
 import math
 from entities.base import Entity
 from entities.unit import Unit
+
+
+def entity_in_rect(
+    entity: Entity,
+    x1: float, y1: float, x2: float, y2: float,
+) -> bool:
+    """Check if an entity's circle overlaps an axis-aligned rectangle."""
+    ex, ey = entity.center()
+    er = entity.collision_radius()
+    rx = min(x1, x2)
+    ry = min(y1, y2)
+    rw = abs(x2 - x1)
+    rh = abs(y2 - y1)
+    # Closest point on rect to circle center
+    closest_x = max(rx, min(ex, rx + rw))
+    closest_y = max(ry, min(ey, ry + rh))
+    return math.hypot(ex - closest_x, ey - closest_y) <= er
+
+
+def apply_rect_selection(
+    entities: list[Entity],
+    x1: float, y1: float, x2: float, y2: float,
+    additive: bool,
+    own_player_ids: set[int] | None = None,
+):
+    """Select entities within an axis-aligned rectangle.
+
+    If *own_player_ids* is given and any matching army unit is inside,
+    only own units are selected.
+    """
+    if not additive:
+        _deselect_all(entities)
+
+    army_units: list[Entity] = []
+    own_army: list[Entity] = []
+    buildings: list[Entity] = []
+    for entity in entities:
+        if not getattr(entity, "selectable", False):
+            continue
+        if not entity_in_rect(entity, x1, y1, x2, y2):
+            continue
+        if getattr(entity, "is_building", False):
+            buildings.append(entity)
+        else:
+            army_units.append(entity)
+            if own_player_ids and hasattr(entity, "player_id"):
+                if entity.player_id in own_player_ids:
+                    own_army.append(entity)
+
+    # Prefer own army > all army > buildings
+    if own_army:
+        targets = own_army
+    elif army_units:
+        targets = army_units
+    else:
+        targets = buildings
+
+    for entity in targets:
+        entity.set_selected(True)
 
 
 def entity_in_circle(
@@ -58,12 +117,14 @@ def apply_circle_selection(
     entities: list[Entity],
     cx: float, cy: float, sr: float,
     additive: bool,
+    own_player_ids: set[int] | None = None,
 ):
     if not additive:
         _deselect_all(entities)
 
-    army_units = []
-    buildings = []
+    army_units: list[Entity] = []
+    own_army: list[Entity] = []
+    buildings: list[Entity] = []
     for entity in entities:
         if not getattr(entity, "selectable", False):
             continue
@@ -73,9 +134,17 @@ def apply_circle_selection(
             buildings.append(entity)
         else:
             army_units.append(entity)
+            if own_player_ids and hasattr(entity, "player_id"):
+                if entity.player_id in own_player_ids:
+                    own_army.append(entity)
 
-    # Army units take priority; fall back to buildings if none
-    targets = army_units if army_units else buildings
+    # Prefer own army > all army > buildings
+    if own_army:
+        targets = own_army
+    elif army_units:
+        targets = army_units
+    else:
+        targets = buildings
     for entity in targets:
         entity.set_selected(True)
 
