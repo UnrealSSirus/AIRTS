@@ -278,9 +278,11 @@ class GameHost:
             for c in self._clients.values():
                 c.outbound.put(msg)
 
-    def send_game_over(self, winner: int) -> None:
-        """Send game_over notification."""
-        msg = {"msg": "game_over", "winner": winner}
+    def send_game_over(self, winner: int, stats: dict | None = None) -> None:
+        """Send game_over notification with optional stats."""
+        msg: dict[str, Any] = {"msg": "game_over", "winner": winner}
+        if stats is not None:
+            msg["stats"] = stats
         with self._clients_lock:
             for c in self._clients.values():
                 c.outbound.put(msg)
@@ -292,20 +294,36 @@ class GameHost:
             for c in self._clients.values():
                 c.outbound.put(msg)
 
-    def reset(self) -> None:
+    def reset(self, clear_clients: bool = False) -> None:
         """Reset to lobby state. Keeps TCP server and connections alive.
 
-        For local games the old client has already disconnected, so we clear
-        the clients dict and reset the player-ID counter so the next client
-        gets the correct ID.
+        *clear_clients* should be True for local/internal-server games where
+        the client disconnects between games (player-ID counter is reset and
+        stale entries are removed).  For dedicated-server / online games the
+        clients stay connected, so we only drain queues.
         """
-        self._next_player_id = self._first_player_id
-        with self._clients_lock:
-            self._clients.clear()
+        if clear_clients:
+            self._next_player_id = self._first_player_id
+            with self._clients_lock:
+                self._clients.clear()
+        else:
+            with self._clients_lock:
+                for c in self._clients.values():
+                    while not c.outbound.empty():
+                        try:
+                            c.outbound.get_nowait()
+                        except queue.Empty:
+                            break
         # Drain stale inbound commands
         while True:
             try:
                 self._inbound_commands.get_nowait()
+            except queue.Empty:
+                break
+        # Drain stale start_game requests
+        while True:
+            try:
+                self._start_game_queue.get_nowait()
             except queue.Empty:
                 break
 
@@ -391,7 +409,7 @@ class GameHost:
 
             await asyncio.gather(recv_task, send_task)
 
-        except (asyncio.IncompleteReadError, ConnectionError, OSError):
+        except (asyncio.IncompleteReadError, ConnectionError, OSError, ValueError):
             pass
         finally:
             conn.connected.clear()

@@ -192,8 +192,8 @@ class DedicatedServer:
 
         result = game.run_server(pre_step=pre_step, post_step=post_step)
 
-        # Send game_over to all clients
-        host.send_game_over(result.get("winner", 0))
+        # Send game_over to all clients (include stats for score screen)
+        host.send_game_over(result.get("winner", 0), stats=result.get("stats"))
         time.sleep(0.5)
 
         # Build team/player names for result

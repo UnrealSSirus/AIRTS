@@ -910,6 +910,13 @@ class Game:
                 entity.researched_unit_type = unit_type
                 entity.start_upgrade("lab")
 
+        elif cmd.type == "surrender":
+            surrendering_team = self.player_team.get(cmd.player_id, cmd.player_id)
+            other_teams = self.all_teams - {surrendering_team}
+            if self._winner == 0:
+                self._winner = next(iter(other_teams)) if other_teams else -1
+            self._phase = "explode"
+
         elif cmd.type == "set_pause":
             self._paused = bool(data.get("paused", False))
 

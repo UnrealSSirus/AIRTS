@@ -145,7 +145,7 @@ class InternalServer:
         self._done_event.clear()
         self._result = None
         self._game = None
-        self._host.reset()
+        self._host.reset(clear_clients=True)
 
     def stop(self) -> None:
         """Clean shutdown of game and networking."""
@@ -226,8 +226,8 @@ class InternalServer:
         except Exception as exc:
             result = {"winner": 0, "error": str(exc)}
 
-        # Notify clients of game over
-        self._host.send_game_over(result.get("winner", 0))
+        # Notify clients of game over (include stats for score screen)
+        self._host.send_game_over(result.get("winner", 0), stats=result.get("stats"))
         time.sleep(0.3)  # brief delay for message to transmit
 
         self._result = result
