@@ -312,8 +312,21 @@ class Game:
             self._pause_btn = Button(self._screen_width - 210, 12, 32, 24, "||", icon="pause")
             self._reset_cam_btn = Button(70, 12, 50, 24, "Reset", font_size=18)
             self._color_mode_btn = Button(130, 12, 60, 24, "Player", font_size=18)
-            self._color_mode: str = display.color_mode
+            self._color_mode: str = display_config.color_mode
             self._pause_font = pygame.font.SysFont(None, 48)
+
+            # Escape menu
+            self._esc_menu_open = False
+            _mbw, _mbh, _mgap = 260, 44, 12
+            _mx = self._screen_width // 2 - _mbw // 2
+            _total_h = 4 * _mbh + 3 * _mgap
+            _my = self._screen_height // 2 - _total_h // 2 + 20
+            self._esc_menu_btns = [
+                ("resume", Button(_mx, _my, _mbw, _mbh, "Back To Game")),
+                ("settings", Button(_mx, _my + (_mbh + _mgap), _mbw, _mbh, "Settings", enabled=False)),
+                ("surrender", Button(_mx, _my + 2 * (_mbh + _mgap), _mbw, _mbh, "Surrender")),
+                ("lobby", Button(_mx, _my + 3 * (_mbh + _mgap), _mbw, _mbh, "Back to Lobby")),
+            ]
 
             # -- camera & world surface -------------------------------------------
             self._world_surface = pygame.Surface((width, height))
@@ -608,18 +621,43 @@ class Game:
                 self.running = False
 
             if self._pause_btn.handle_event(event):
-                self._toggle_pause()
+                if not self._esc_menu_open:
+                    self._toggle_pause()
                 continue
 
-            if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
-                    if self._paused:
-                        # Already paused — quit the game
-                        self._set_mouse_grab(False)
-                        self.running = False
-                    else:
+            # ESC toggles the escape menu
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                self._esc_menu_open = not self._esc_menu_open
+                if self._esc_menu_open:
+                    if not self._paused:
                         self._toggle_pause()
-                    continue
+                else:
+                    if self._paused:
+                        self._toggle_pause()
+                continue
+
+            # When escape menu is open, only handle menu button clicks
+            if self._esc_menu_open:
+                for action, btn in self._esc_menu_btns:
+                    if btn.handle_event(event):
+                        if action == "resume":
+                            self._esc_menu_open = False
+                            if self._paused:
+                                self._toggle_pause()
+                        elif action == "surrender":
+                            if self._winner == 0:
+                                my_teams = self._selectable_teams
+                                other = self.all_teams - my_teams
+                                self._winner = next(iter(other)) if other else -1
+                            self._set_mouse_grab(False)
+                            self.running = False
+                        elif action == "lobby":
+                            if self._winner == 0:
+                                self._winner = -1
+                            self._set_mouse_grab(False)
+                            self.running = False
+                        break
+                continue
 
             # Scroll wheel zoom (available always, even while paused)
             if event.type == pygame.MOUSEWHEEL:
@@ -1487,17 +1525,38 @@ class Game:
                          enable_t2=self.enable_t2, t2_upgrades=self._t2_upgrades,
                          camera=self._camera, world_w=self.width, world_h=self.height)
 
-        # Paused overlay (centered on game area)
-        if self._paused:
+        # Paused overlay (centered on game area) — only when escape menu is not open
+        if self._paused and not self._esc_menu_open:
             pause_surf = self._pause_font.render("PAUSED", True, (220, 220, 240))
-            hint_surf = self._fps_font.render("ESC again to quit", True, (140, 140, 160))
+            hint_surf = self._fps_font.render("Press ESC for menu", True, (140, 140, 160))
             px = ga.centerx - pause_surf.get_width() // 2
             py = ga.centery - pause_surf.get_height() // 2 - 10
             self.screen.blit(pause_surf, (px, py))
             hx = ga.centerx - hint_surf.get_width() // 2
             self.screen.blit(hint_surf, (hx, py + pause_surf.get_height() + 4))
 
+        # Escape menu overlay
+        if self._esc_menu_open:
+            self._draw_esc_menu()
+
         pygame.display.flip()
+
+    def _draw_esc_menu(self) -> None:
+        """Draw a semi-transparent overlay with pause menu buttons."""
+        overlay = pygame.Surface(
+            (self._screen_width, self._screen_height), pygame.SRCALPHA
+        )
+        overlay.fill((0, 0, 0, 150))
+        self.screen.blit(overlay, (0, 0))
+
+        title_surf = self._pause_font.render("PAUSED", True, (220, 220, 240))
+        tx = self._screen_width // 2 - title_surf.get_width() // 2
+        first_btn_y = self._esc_menu_btns[0][1].rect.top
+        ty = first_btn_y - title_surf.get_height() - 16
+        self.screen.blit(title_surf, (tx, ty))
+
+        for _, btn in self._esc_menu_btns:
+            btn.draw(self.screen)
 
     # -- drawing helpers ----------------------------------------------------
 

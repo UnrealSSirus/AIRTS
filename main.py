@@ -64,7 +64,7 @@ def main():
 
 
 def _run_server(args):
-    """Run as a dedicated server — headless, accepts 2 remote clients."""
+    """Run as a dedicated server — lobby-based, accepts remote clients."""
     import os
     os.environ["SDL_VIDEODRIVER"] = "dummy"
 
@@ -75,37 +75,23 @@ def _run_server(args):
 
     from networking.server import DedicatedServer
 
-    obs_val = (args.obs_min + args.obs_max) // 2  # use midpoint
     max_ticks = args.time_limit * 60 * 60 if args.time_limit > 0 else 0
 
     server = DedicatedServer(
         port=args.port,
-        width=args.width,
-        height=args.height,
-        obstacle_count=obs_val,
-        max_ticks=max_ticks,
-        enable_t2=args.enable_t2,
+        max_ticks_default=max_ticks,
+        enable_t2_default=args.enable_t2,
     )
 
     try:
-        result = server.run()
+        server.run()  # loops lobby → game → lobby
     except KeyboardInterrupt:
         print("\n[Server] Shutting down...")
-        sys.exit(0)
     except Exception as exc:
         from systems.crash_handler import log_crash
         path = log_crash(exc, context="server")
         print(f"[Server] Crashed — log saved to {path}")
         sys.exit(1)
-
-    winner = result.get("winner", 0)
-    team_names = result.get("team_names", {})
-    if winner > 0:
-        print(f"[Server] Winner: Player {winner} ({team_names.get(winner, '?')})")
-    elif winner == -1:
-        print("[Server] Result: Draw")
-    else:
-        print("[Server] Result: Undecided")
 
     pygame.quit()
     sys.exit(0)

@@ -169,6 +169,19 @@ class ClientGameScreen(BaseScreen):
             self._reset_cam_btn = None
             self._pause_font = None
 
+        # Escape menu
+        self._esc_menu_open = False
+        _mbw, _mbh, _mgap = 260, 44, 12
+        _mx = self.width // 2 - _mbw // 2
+        _total_h = 4 * _mbh + 3 * _mgap
+        _my = self.height // 2 - _total_h // 2 + 20
+        self._esc_menu_btns = [
+            ("resume", Button(_mx, _my, _mbw, _mbh, "Back To Game")),
+            ("settings", Button(_mx, _my + (_mbh + _mgap), _mbw, _mbh, "Settings", enabled=False)),
+            ("surrender", Button(_mx, _my + 2 * (_mbh + _mgap), _mbw, _mbh, "Surrender")),
+            ("lobby", Button(_mx, _my + 3 * (_mbh + _mgap), _mbw, _mbh, "Back to Lobby")),
+        ]
+
         # Previous laser set for detecting new lasers (for sound)
         self._prev_laser_keys: set[tuple] = set()
 
@@ -251,6 +264,13 @@ class ClientGameScreen(BaseScreen):
             if self._winner != 0 and self._phase == "playing":
                 self._phase = "explode"
                 self._anim_timer = 0.0
+                # Close escape menu if game ended naturally
+                if self._esc_menu_open:
+                    self._esc_menu_open = False
+                    if self._is_local and self._paused:
+                        self._toggle_pause()
+                    else:
+                        pygame.event.set_grab(True)
                 # Build fragments from losing CCs
                 losing_teams = self._all_teams - {self._winner} if self._winner > 0 else set()
                 for _lt in losing_teams:
@@ -272,9 +292,36 @@ class ClientGameScreen(BaseScreen):
                     self._client.stop()
                     return ScreenResult("quit")
 
+                # ESC toggles the escape menu
                 if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-                    self._client.stop()
-                    return ScreenResult("main_menu")
+                    self._esc_menu_open = not self._esc_menu_open
+                    if self._is_local:
+                        self._toggle_pause()
+                    else:
+                        pygame.event.set_grab(not self._esc_menu_open)
+                    continue
+
+                # When escape menu is open, only handle menu button clicks
+                if self._esc_menu_open:
+                    for action, btn in self._esc_menu_btns:
+                        if btn.handle_event(event):
+                            if action == "resume":
+                                self._esc_menu_open = False
+                                if self._is_local:
+                                    self._toggle_pause()
+                                else:
+                                    pygame.event.set_grab(True)
+                            elif action == "surrender":
+                                if self._winner == 0:
+                                    other = self._all_teams - {self._my_team}
+                                    self._winner = next(iter(other)) if other else -1
+                                return self._build_result()
+                            elif action == "lobby":
+                                if self._winner == 0:
+                                    self._winner = -1
+                                return self._build_result()
+                            break
+                    continue
 
                 # Pause toggle (spacebar for local games)
                 if (event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE
@@ -1089,7 +1136,10 @@ class ClientGameScreen(BaseScreen):
         # Winner overlay
         if self._winner:
             big_font = pygame.font.SysFont(None, 64)
-            if self._winner == self._my_team:
+            if self._winner == -1:
+                text = "DRAW"
+                color = (200, 200, 100)
+            elif self._winner == self._my_team:
                 text = "VICTORY!"
                 color = (100, 255, 140)
             else:
@@ -1099,14 +1149,37 @@ class ClientGameScreen(BaseScreen):
             self.screen.blit(surf, (self.width // 2 - surf.get_width() // 2,
                                     self.height // 2 - surf.get_height() // 2))
 
-        # PAUSED overlay (local games)
-        if self._paused and self._is_local and self._pause_font:
+        # PAUSED overlay (local games) — only when escape menu is not open
+        if self._paused and self._is_local and self._pause_font and not self._esc_menu_open:
             pause_surf = self._pause_font.render("PAUSED", True, (255, 255, 255))
             px = self.width // 2 - pause_surf.get_width() // 2
             py = self.height // 2 - pause_surf.get_height() // 2
             self.screen.blit(pause_surf, (px, py))
 
+        # Escape menu overlay
+        if self._esc_menu_open:
+            self._draw_esc_menu()
+
         pygame.display.flip()
+
+    # -- escape menu overlay ---------------------------------------------------
+
+    def _draw_esc_menu(self) -> None:
+        """Draw a semi-transparent overlay with pause menu buttons."""
+        overlay = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 150))
+        self.screen.blit(overlay, (0, 0))
+
+        # Title above buttons
+        font = _get_font(48)
+        title_surf = font.render("PAUSED", True, (220, 220, 240))
+        tx = self.width // 2 - title_surf.get_width() // 2
+        first_btn_y = self._esc_menu_btns[0][1].rect.top
+        ty = first_btn_y - title_surf.get_height() - 16
+        self.screen.blit(title_surf, (tx, ty))
+
+        for _, btn in self._esc_menu_btns:
+            btn.draw(self.screen)
 
     # -- HUD drawing (delegated to gui.py via adapter) -----------------------
 

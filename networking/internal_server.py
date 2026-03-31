@@ -62,6 +62,7 @@ class InternalServer:
 
         self._result: dict[str, Any] | None = None
         self._done_event = threading.Event()
+        self._stop_requested = threading.Event()
         self._thread: threading.Thread | None = None
         self._game = None  # set on game thread
 
@@ -124,6 +125,7 @@ class InternalServer:
             "enable_t2": enable_t2,
             "save_replay": save_replay,
         }
+        self._stop_requested.clear()
         self._done_event.clear()
         self._result = None
         self._game = None
@@ -132,7 +134,11 @@ class InternalServer:
 
     def reset(self) -> None:
         """Reset for a new game.  Keeps the TCP server and connections alive."""
-        # Wait for the game thread to finish if it's still running
+        # Signal the game loop and pre-game wait loop to exit
+        self._stop_requested.set()
+        if self._game is not None:
+            self._game.running = False
+        # Wait for the game thread to finish
         if self._thread is not None:
             self._thread.join(timeout=5.0)
             self._thread = None
@@ -143,6 +149,7 @@ class InternalServer:
 
     def stop(self) -> None:
         """Clean shutdown of game and networking."""
+        self._stop_requested.set()
         if self._game is not None:
             self._game.running = False
         self._host.stop()
@@ -180,7 +187,7 @@ class InternalServer:
 
         # Wait for all clients to connect and be ready
         while not self._host.all_clients_ready:
-            if not self._host._running:
+            if not self._host._running or self._stop_requested.is_set():
                 self._done_event.set()
                 return
             time.sleep(0.05)

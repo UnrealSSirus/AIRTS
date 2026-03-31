@@ -242,22 +242,11 @@ class MultiplayerLobbyScreen(BaseScreen):
                 if self._online_client.error:
                     self._online_error = self._online_client.error
                     self._online_status = ""
-                elif self._online_client.game_started:
-                    # Server started the game — transition to client game screen
-                    return self._build_online_result()
                 elif self._online_client.connected:
-                    # Show lobby status from server
-                    lobby = self._online_client.lobby_status
-                    if lobby:
-                        players = lobby.get("players", {})
-                        max_p = lobby.get("max_players", 2)
-                        names = [info.get("name", "?") for info in players.values() if info.get("name")]
-                        self._online_status = f"Connected ({len(names)}/{max_p}): {', '.join(names)}"
-                        if len(names) >= max_p:
-                            self._online_status += " — Starting soon..."
-                    else:
-                        self._online_status = "Connected. Waiting for players..."
-                    self._online_error = ""
+                    # Connected — go straight to the game lobby
+                    return ScreenResult("create_lobby", data={
+                        "online_client": self._online_client,
+                    })
 
             self._draw()
 
@@ -362,11 +351,6 @@ class MultiplayerLobbyScreen(BaseScreen):
     def _build_join_result(self) -> ScreenResult:
         return ScreenResult("mp_client_game", data={
             "client": self._client_obj,
-        })
-
-    def _build_online_result(self) -> ScreenResult:
-        return ScreenResult("mp_client_game", data={
-            "client": self._online_client,
         })
 
     @staticmethod
