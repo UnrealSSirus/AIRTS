@@ -1,6 +1,6 @@
 """Global audio settings."""
 
-master_volume: float = 0.3
+master_volume: float = 0.075
 
 
 def set_volume(v: float) -> None:

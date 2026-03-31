@@ -60,7 +60,9 @@ class App:
             choices = self._registry.get_choices()
             if not choices:
                 choices = [("wander", "Wander AI")]
-            return CreateLobbyScreen(self._screen, self._clock, choices).run()
+            server = data.get("server") if data else None
+            return CreateLobbyScreen(self._screen, self._clock, choices,
+                                     server=server).run()
 
         elif name == "game":
             return self._run_game(data)
@@ -95,12 +97,16 @@ class App:
             team_names = data.get("team_names", {})
             player_names = data.get("player_names", {})
             player_team = data.get("player_team", {})
+            source_screen = data.get("source_screen", "main_menu")
+            lobby_data = data.get("lobby_data", {})
             return ResultsScreen(self._screen, self._clock,
                                  winner, human_teams, stats=stats,
                                  replay_filepath=replay_filepath,
                                  team_names=team_names,
                                  player_names=player_names,
-                                 player_team=player_team).run()
+                                 player_team=player_team,
+                                 source_screen=source_screen,
+                                 lobby_data=lobby_data).run()
 
         elif name == "debug":
             return DebugScreen(self._screen, self._clock,
@@ -121,7 +127,13 @@ class App:
             return ScreenResult("replay_playback", data={"filepath": filepath})
 
         elif name == "multiplayer_lobby":
-            return MultiplayerLobbyScreen(self._screen, self._clock).run()
+            returning_host = data.get("host") if data else None
+            returning_client = data.get("client") if data else None
+            return MultiplayerLobbyScreen(
+                self._screen, self._clock,
+                returning_host=returning_host,
+                returning_client=returning_client,
+            ).run()
 
         elif name == "mp_host_game":
             return self._run_mp_host_game(data)
@@ -231,26 +243,37 @@ class App:
                 "team_names": result.get("team_names", {}),
                 "player_names": result.get("player_names", {}),
                 "player_team": result.get("player_team", {}),
+                "source_screen": "create_lobby",
             })
 
         # --- Human present: route through InternalServer → GameClient → ClientGameScreen ---
-        server = InternalServer(
-            width=width,
-            height=height,
-            map_generator=map_gen,
-            player_ai=player_ai,
-            player_team=player_team,
-            replay_config=replay_config,
-            player_name=player_name,
-            max_ticks=max_ticks,
-            enable_t2=enable_t2,
-            max_players=1,
-            host_name=player_name,
-        )
+        server: InternalServer | None = data.get("server")
+        owns_server = server is None
 
-        try:
+        if server is None:
+            # Determine first_player_id so client gets the right slot
+            first_player_id = min(human_pids) if human_pids else 1
+            server = InternalServer(
+                port=0,
+                host_name=player_name,
+                max_players=1,
+                first_player_id=first_player_id,
+            )
             server.start()
             server.wait_ready()
+
+        try:
+            server.run_game(
+                width=width,
+                height=height,
+                map_generator=map_gen,
+                player_ai=player_ai,
+                player_team=player_team,
+                replay_config=replay_config,
+                player_name=player_name,
+                max_ticks=max_ticks,
+                enable_t2=enable_t2,
+            )
 
             client = GameClient("127.0.0.1", port=server.port, player_name=player_name)
             client.start()
@@ -278,6 +301,8 @@ class App:
                 "team_names": srv_result.get("team_names", result.data.get("team_names", {})),
                 "player_names": srv_result.get("player_names", result.data.get("player_names", {})),
                 "player_team": srv_result.get("player_team", result.data.get("player_team", {})),
+                "source_screen": "create_lobby",
+                "lobby_data": {"server": server},
             }
 
         except Exception as exc:
@@ -286,11 +311,16 @@ class App:
             print(f"[AIRTS] Game crashed — log saved to {path}")
             return ScreenResult("crash_notice",
                                 data={"log_path": path, "context": "game"})
-        finally:
-            server.stop()
 
-        if result.next_screen == "quit":
-            return result
+        if result.next_screen in ("quit", "main_menu"):
+            # User quit or escaped mid-game — tear down the server
+            server.stop()
+            merged.pop("lobby_data", None)
+            if result.next_screen == "quit":
+                return result
+        else:
+            # Normal game end — reset server for next game
+            server.reset()
 
         return ScreenResult("results", data=merged)
 
@@ -369,11 +399,13 @@ class App:
             return ScreenResult("crash_notice",
                                 data={"log_path": path, "context": "mp_host_game"})
 
-        # Notify client of game over
+        # Notify client of game over and return to lobby
         host_obj.send_game_over(result.get("winner", 0))
         import time
-        time.sleep(0.5)  # brief delay for message to transmit
-        host_obj.stop()
+        time.sleep(0.3)
+        host_obj.send_return_to_lobby()
+        time.sleep(0.2)
+        host_obj.reset()
 
         return ScreenResult("results", data={
             "winner": result.get("winner", 0),
@@ -382,6 +414,8 @@ class App:
             "replay_filepath": result.get("replay_filepath"),
             "team_names": {t: (host_name if pid == 1 else client_name)
                            for pid, t in mp_player_team.items()},
+            "source_screen": "multiplayer_lobby",
+            "lobby_data": {"host": host_obj},
         })
 
     def _run_mp_client_game(self, data: dict) -> ScreenResult:
@@ -399,6 +433,9 @@ class App:
             return ScreenResult("crash_notice",
                                 data={"log_path": path, "context": "mp_client_game"})
 
+        if result.next_screen == "results":
+            result.data["source_screen"] = "multiplayer_lobby"
+            result.data["lobby_data"] = {"client": client}
         return result
 
     def _run_replay_playback(self, data: dict) -> ScreenResult:

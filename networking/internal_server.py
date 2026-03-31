@@ -14,62 +14,50 @@ from systems.commands import CommandQueue
 
 
 class InternalServer:
-    """Runs Game + GameHost in a background thread for local play."""
+    """Persistent server that hosts games in a background thread.
+
+    The server (GameHost + TCP socket) is created once and can run multiple
+    games sequentially.  Between games, call ``reset()`` to clear state while
+    keeping client connections alive, then call ``run_game()`` again.
+
+    Lifecycle::
+
+        __init__()         → creates GameHost
+        start()            → starts GameHost TCP server
+        run_game(params)   → spawns game thread
+        wait_done()        → blocks until game ends
+        reset()            → clears game state, host stays alive
+        run_game(params)   → another game
+        stop()             → tears everything down
+    """
 
     def __init__(
         self,
-        width: int,
-        height: int,
-        map_generator,
-        player_ai: dict,
-        player_team: dict[int, int] | None,
-        replay_config: dict | None,
-        player_name: str,
-        max_ticks: int = 0,
-        enable_t2: bool = False,
-        max_players: int = 1,
+        port: int = 0,
         host_name: str = "Host",
-        save_replay: bool = True,
+        max_players: int = 1,
+        broadcast_interval: int = 2,
+        first_player_id: int | None = None,
         existing_host: GameHost | None = None,
     ):
-        self._width = width
-        self._height = height
-        self._map_generator = map_generator
-        self._player_ai = player_ai
-        self._player_team = player_team
-        self._replay_config = replay_config
-        self._player_name = player_name
-        self._max_ticks = max_ticks
-        self._enable_t2 = enable_t2
-        self._max_players = max_players
         self._host_name = host_name
-        self._save_replay = save_replay
+        self._max_players = max_players
+        self._broadcast_interval = broadcast_interval
         self._owns_host = existing_host is None
 
         self._command_queue = CommandQueue()
 
-        # Determine human player_id so the connecting client gets the right ID.
-        # Without this, the client would always get player_id=2 (LAN host default),
-        # which is wrong when the human is player 1 and the bot is player 2.
-        if player_team:
-            all_pids = set(player_team.keys())
-        else:
-            all_pids = {1, 2}
-        human_pids = all_pids - set(player_ai.keys())
-        first_player_id = min(human_pids) if human_pids else 1
-
         if existing_host is not None:
             self._host = existing_host
-            # Update its broadcast interval for local play
-            self._host._broadcast_interval = 2
+            self._host._broadcast_interval = broadcast_interval
         else:
             self._host = GameHost(
                 command_queue=self._command_queue,
-                port=0,  # ephemeral — OS picks a free port
+                port=port,
                 host_name=host_name,
                 max_players=max_players,
-                broadcast_interval=2,  # ~33ms for local play (smoother than default 6)
-                first_player_id=first_player_id,
+                broadcast_interval=broadcast_interval,
+                first_player_id=first_player_id if first_player_id is not None else (2 if max_players == 1 else 1),
             )
 
         self._result: dict[str, Any] | None = None
@@ -88,24 +76,70 @@ class InternalServer:
     def host(self) -> GameHost:
         return self._host
 
+    @property
+    def result(self) -> dict[str, Any] | None:
+        """Game result dict (available after game finishes)."""
+        return self._result
+
     def start(self) -> None:
-        """Start the GameHost networking, then launch the game thread."""
+        """Start the GameHost networking (TCP server). Does NOT start a game."""
         self._host.start()
-        self._thread = threading.Thread(target=self._run_game, daemon=True)
-        self._thread.start()
 
     def wait_ready(self, timeout: float = 10.0) -> bool:
         """Block until the server is listening and ready for connections."""
         return self._host._bound_event.wait(timeout=timeout)
 
     def wait_done(self, timeout: float | None = None) -> bool:
-        """Block until the game finishes."""
+        """Block until the current game finishes."""
         return self._done_event.wait(timeout=timeout)
 
-    @property
-    def result(self) -> dict[str, Any] | None:
-        """Game result dict (available after game finishes)."""
-        return self._result
+    def run_game(
+        self,
+        width: int,
+        height: int,
+        map_generator,
+        player_ai: dict,
+        player_team: dict[int, int] | None,
+        replay_config: dict | None,
+        player_name: str,
+        max_ticks: int = 0,
+        enable_t2: bool = False,
+        save_replay: bool = True,
+    ) -> None:
+        """Spawn a background thread to run a game with the given parameters.
+
+        The GameHost must already be started via ``start()``.  Call
+        ``wait_done()`` to block until the game finishes, then read
+        ``result`` for the outcome.
+        """
+        self._game_params = {
+            "width": width,
+            "height": height,
+            "map_generator": map_generator,
+            "player_ai": player_ai,
+            "player_team": player_team,
+            "replay_config": replay_config,
+            "player_name": player_name,
+            "max_ticks": max_ticks,
+            "enable_t2": enable_t2,
+            "save_replay": save_replay,
+        }
+        self._done_event.clear()
+        self._result = None
+        self._game = None
+        self._thread = threading.Thread(target=self._run_game, daemon=True)
+        self._thread.start()
+
+    def reset(self) -> None:
+        """Reset for a new game.  Keeps the TCP server and connections alive."""
+        # Wait for the game thread to finish if it's still running
+        if self._thread is not None:
+            self._thread.join(timeout=5.0)
+            self._thread = None
+        self._done_event.clear()
+        self._result = None
+        self._game = None
+        self._host.reset()
 
     def stop(self) -> None:
         """Clean shutdown of game and networking."""
@@ -121,21 +155,23 @@ class InternalServer:
         """Entry point for the background game thread."""
         from game import Game
 
+        p = self._game_params
+
         game = Game(
-            width=self._width,
-            height=self._height,
-            map_generator=self._map_generator,
-            player_ai=self._player_ai,
-            player_team=self._player_team,
-            player_name=self._player_name,
+            width=p["width"],
+            height=p["height"],
+            map_generator=p["map_generator"],
+            player_ai=p["player_ai"],
+            player_team=p["player_team"],
+            player_name=p["player_name"],
             headless=True,
-            max_ticks=self._max_ticks,
+            max_ticks=p["max_ticks"],
             is_multiplayer=True,
             selectable_teams=set(),  # no local selection on server thread
-            enable_t2=self._enable_t2,
+            enable_t2=p["enable_t2"],
             server_mode=True,
-            save_replay=self._save_replay,
-            replay_config=self._replay_config,
+            save_replay=p["save_replay"],
+            replay_config=p["replay_config"],
         )
         self._game = game
 
@@ -158,12 +194,12 @@ class InternalServer:
             elif pid in game.player_ai:
                 player_names[pid] = game.player_ai[pid].ai_name
             else:
-                player_names[pid] = self._player_name
+                player_names[pid] = p["player_name"]
 
         # Send game_start
         self._host.send_game_start(
-            game.entities, self._width, self._height,
-            enable_t2=self._enable_t2,
+            game.entities, p["width"], p["height"],
+            enable_t2=p["enable_t2"],
             player_team=dict(game.player_team),
             player_names=player_names,
         )

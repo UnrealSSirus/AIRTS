@@ -826,7 +826,7 @@ class LineGraph:
                     return "-"
                 if self.value_format:
                     return self.value_format.format(v) + self.y_suffix
-                return f"{int(v)}{self.y_suffix}"
+                return f"{v:.2f}{self.y_suffix}"
 
             time_s = tip_font.render(time_str, True, (220, 220, 240))
             tip_rendered = [time_s]
@@ -1147,7 +1147,7 @@ class MultiLineGraph:
                     if self.value_format:
                         val_str = self.value_format.format(val) + self.y_suffix
                     else:
-                        val_str = f"{int(val)}{self.y_suffix}"
+                        val_str = f"{val:.2f}{self.y_suffix}"
                     lines_text.append(f"{s['name']}: {val_str}")
                     lines_colors.append(s["color"])
 

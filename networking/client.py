@@ -51,6 +51,7 @@ class GameClient:
 
         # Lobby status from server (for "Play Online" mode)
         self._lobby_status: dict | None = None
+        self._lobby_settings: dict | None = None
         self._lobby_lock = threading.Lock()
         self.opponent_name: str = ""
 
@@ -78,6 +79,11 @@ class GameClient:
         with self._lobby_lock:
             return self._lobby_status
 
+    @property
+    def lobby_settings(self) -> dict | None:
+        with self._lobby_lock:
+            return self._lobby_settings
+
     # -- lifecycle ----------------------------------------------------------
 
     def start(self) -> None:
@@ -92,6 +98,16 @@ class GameClient:
             self._loop.call_soon_threadsafe(self._loop.stop)
         if self._thread is not None:
             self._thread.join(timeout=2.0)
+
+    def reset(self) -> None:
+        """Reset for a new game, keeping the connection alive."""
+        self._game_started.clear()
+        # Drain stale inbound frames
+        while True:
+            try:
+                self._inbound.get_nowait()
+            except queue.Empty:
+                break
 
     # -- game-thread API (called from the main/pygame thread) ---------------
 
@@ -200,6 +216,12 @@ class GameClient:
                     pid = int(pid_str) if isinstance(pid_str, str) else pid_str
                     if pid != self.player_id and info.get("name"):
                         self.opponent_name = info["name"]
+            elif msg_type == "lobby_settings":
+                with self._lobby_lock:
+                    self._lobby_settings = msg
+            elif msg_type == "return_to_lobby":
+                self._game_started.clear()
+                self._inbound.put(msg)
             elif msg_type in ("state", "game_over"):
                 self._inbound.put(msg)
 

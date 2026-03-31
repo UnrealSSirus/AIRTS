@@ -76,6 +76,9 @@ class GameHost:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
 
+        # Lobby settings (broadcast to clients when changed)
+        self._lobby_settings: dict | None = None
+
         # Ephemeral port support: when port=0, OS assigns a free port
         self._bound_port: int = 0
         self._bound_event = threading.Event()
@@ -161,6 +164,23 @@ class GameHost:
                 pass  # event loop already closed
         if self._thread is not None:
             self._thread.join(timeout=2.0)
+
+    # -- lobby settings API ---------------------------------------------------
+
+    def set_lobby_settings(self, settings: dict) -> None:
+        """Store lobby settings and broadcast to all connected clients."""
+        self._lobby_settings = settings
+        self.broadcast_lobby_settings()
+
+    def broadcast_lobby_settings(self) -> None:
+        """Send current lobby settings to all connected clients."""
+        if self._lobby_settings is None:
+            return
+        msg = {"msg": "lobby_settings", **self._lobby_settings}
+        with self._clients_lock:
+            for c in self._clients.values():
+                if c.connected.is_set():
+                    c.outbound.put(msg)
 
     # -- game-thread API (called from the main/pygame thread) ---------------
 
@@ -256,6 +276,34 @@ class GameHost:
             for c in self._clients.values():
                 c.outbound.put(msg)
 
+    def send_return_to_lobby(self) -> None:
+        """Notify clients that the server is returning to the lobby."""
+        msg = {"msg": "return_to_lobby"}
+        with self._clients_lock:
+            for c in self._clients.values():
+                c.outbound.put(msg)
+
+    def reset(self) -> None:
+        """Reset to lobby state. Keeps TCP server and connections alive.
+
+        Connected clients remain ready (they don't need to re-join).
+        Only drain stale game state from queues.
+        """
+        with self._clients_lock:
+            for c in self._clients.values():
+                # Drain stale outbound frames (state, game_over, etc.)
+                while not c.outbound.empty():
+                    try:
+                        c.outbound.get_nowait()
+                    except queue.Empty:
+                        break
+        # Drain stale inbound commands
+        while True:
+            try:
+                self._inbound_commands.get_nowait()
+            except queue.Empty:
+                break
+
     # -- networking thread --------------------------------------------------
 
     def _run_network(self) -> None:
@@ -328,8 +376,9 @@ class GameHost:
                 conn.name = msg.get("player_name", "Client")
                 conn.ready.set()
 
-            # Broadcast lobby status to all clients
+            # Broadcast lobby status and settings to all clients
             await self._broadcast_lobby_status()
+            self.broadcast_lobby_settings()
 
             # Run send/recv concurrently
             recv_task = asyncio.ensure_future(self._recv_loop(reader, player_id))

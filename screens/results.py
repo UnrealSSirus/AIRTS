@@ -155,7 +155,9 @@ class ResultsScreen(BaseScreen):
                  replay_filepath: str | None = None,
                  team_names: dict[int, str] | None = None,
                  player_names: dict[int, str] | None = None,
-                 player_team: dict[int, int] | None = None):
+                 player_team: dict[int, int] | None = None,
+                 source_screen: str = "main_menu",
+                 lobby_data: dict | None = None):
         super().__init__(screen, clock)
         self._winner = winner
         self._human_teams = human_teams or set()
@@ -164,6 +166,8 @@ class ResultsScreen(BaseScreen):
         self._team_names = team_names or {}
         self._player_names = player_names or {}
         self._player_team = player_team or {}
+        self._source_screen = source_screen
+        self._lobby_data = lobby_data or {}
 
         # Derive the set of team IDs from stats or player_team
         self._team_ids: list[int] = self._derive_team_ids()
@@ -179,7 +183,8 @@ class ResultsScreen(BaseScreen):
         start_x = self.width // 2 - total_w // 2
         btn_y = self.height - 50
 
-        self._btn = Button(start_x, btn_y, btn_w, BTN_HEIGHT, "Return to Menu")
+        back_label = "Return to Lobby" if source_screen != "main_menu" else "Return to Menu"
+        self._btn = Button(start_x, btn_y, btn_w, BTN_HEIGHT, back_label)
         self._replay_btn = Button(start_x + btn_w + gap, btn_y,
                                   btn_w, BTN_HEIGHT, "Watch Replay",
                                   enabled=replay_filepath is not None)
@@ -292,7 +297,7 @@ class ResultsScreen(BaseScreen):
                 if event.type == pygame.QUIT:
                     return ScreenResult("quit")
                 if self._btn.handle_event(event):
-                    return ScreenResult("main_menu")
+                    return ScreenResult(self._source_screen, data=self._lobby_data)
                 if self._replay_btn.handle_event(event):
                     return ScreenResult("replay_playback",
                                         data={"filepath": self._replay_filepath})
