@@ -100,9 +100,11 @@ class CreateLobbyScreen(BaseScreen):
     """Configure game format, AIs, and map settings, then start."""
 
     def __init__(self, screen: pygame.Surface, clock: pygame.time.Clock,
-                 ai_choices: list[tuple[str, str]]):
+                 ai_choices: list[tuple[str, str]],
+                 server=None):
         super().__init__(screen, clock)
         self._ai_choices = ai_choices
+        self._server = server  # InternalServer, reused across games
         self._full_choices: list[tuple[str, str]] = [_HUMAN_CHOICE] + list(ai_choices)
 
         # ── two-column layout ────────────────────────────────────────────────
@@ -320,8 +322,13 @@ class CreateLobbyScreen(BaseScreen):
         while True:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
+                    if self._server is not None:
+                        self._server.stop()
                     return ScreenResult("quit")
                 if self._back.handle_event(event):
+                    if self._server is not None:
+                        self._server.stop()
+                        self._server = None
                     return ScreenResult("main_menu")
 
                 # Per-slot name inputs (human players only)
@@ -469,6 +476,7 @@ class CreateLobbyScreen(BaseScreen):
             "save_debug_summary": self._debug_summary_cb.checked,
             "headless":      self._headless_cb.checked,
             "enable_t2":     self._t2_cb.checked,
+            "server":        self._server,
         })
 
     # ── rendering ─────────────────────────────────────────────────────────────

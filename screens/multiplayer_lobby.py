@@ -51,14 +51,15 @@ _SUCCESS_COLOR = (100, 255, 140)
 class MultiplayerLobbyScreen(BaseScreen):
     """Host/Join/Play Online flow for multiplayer games."""
 
-    def __init__(self, screen: pygame.Surface, clock: pygame.time.Clock):
+    def __init__(self, screen: pygame.Surface, clock: pygame.time.Clock,
+                 returning_host=None, returning_client=None):
         super().__init__(screen, clock)
         cx = self.width // 2
 
         # Load saved player name from lobby settings
         saved_name = _load_settings().get("player_name", "")
 
-        # Mode: not yet chosen
+        # Mode: not yet chosen (unless returning from a game)
         self._mode: str = ""  # "", "host", "join", "online"
 
         # -- Initial menu buttons --
@@ -144,6 +145,18 @@ class MultiplayerLobbyScreen(BaseScreen):
         self._online_status = ""
         self._online_error = ""
 
+        # If returning from a game with an existing host/client, restore state
+        if returning_host is not None:
+            self._mode = "host"
+            self._host_obj = returning_host
+            self._host_status = "Returned to lobby. Waiting for player..."
+            if returning_host.client_ready:
+                self._host_status = f"Player '{returning_host.client_name}' connected!"
+        elif returning_client is not None:
+            self._mode = "join"
+            self._client_obj = returning_client
+            self._join_status = f"Connected to {returning_client.host_name}. Waiting for host to start..."
+
     def run(self) -> ScreenResult:
         while True:
             dt = self.clock.tick(60) / 1000.0
@@ -210,6 +223,9 @@ class MultiplayerLobbyScreen(BaseScreen):
             if self._mode == "host" and self._host_obj:
                 if self._host_obj.client_ready:
                     self._host_status = f"Player '{self._host_obj.client_name}' connected!"
+                # Broadcast current lobby settings to connected clients
+                if self._host_obj.connected_count > 0:
+                    self._host_obj.set_lobby_settings(self._gather_host_settings())
 
             if self._mode == "join" and self._client_obj:
                 if self._client_obj.error:
@@ -312,6 +328,18 @@ class MultiplayerLobbyScreen(BaseScreen):
         self._online_status = f"Connecting to {ip}:{port}..."
         self._online_error = ""
 
+    def _gather_host_settings(self) -> dict:
+        """Build a settings dict from the current host lobby UI state."""
+        map_key = self._host_map_size.value
+        host_name = self._host_name_input.text.strip() or "Host"
+        host_team = int(self._host_team_dropdown.value)
+        return {
+            "map_size": map_key,
+            "obstacles": self._host_obstacles.value,
+            "host_name": host_name,
+            "host_team": host_team,
+        }
+
     def _build_host_result(self) -> ScreenResult:
         map_key = self._host_map_size.value
         map_w, map_h = _MAP_SIZES[map_key]
@@ -362,6 +390,33 @@ class MultiplayerLobbyScreen(BaseScreen):
         if self._online_client:
             self._online_client.stop()
             self._online_client = None
+
+    def _draw_lobby_settings(self, client, y_start: int) -> None:
+        """Draw a read-only panel showing lobby settings received from the host."""
+        settings = client.lobby_settings if client else None
+        if not settings:
+            return
+        font = _get_font(CONTENT_FONT_SIZE)
+        small = _get_font(CONTENT_FONT_SIZE - 2)
+        cx = self.width // 2
+
+        # Map size
+        map_key = settings.get("map_size", "?")
+        _MAP_LABELS = {"small": "Small", "medium": "Medium", "large": "Large"}
+        map_label = _MAP_LABELS.get(map_key, map_key)
+        s = font.render(f"Map: {map_label}", True, CONTENT_TEXT)
+        self.screen.blit(s, (cx - s.get_width() // 2, y_start))
+
+        # Obstacles
+        obs = settings.get("obstacles", 0)
+        s = small.render(f"Obstacles: {obs}", True, _STATUS_COLOR)
+        self.screen.blit(s, (cx - s.get_width() // 2, y_start + 26))
+
+        # Host info
+        host_name = settings.get("host_name", "Host")
+        host_team = settings.get("host_team", 1)
+        s = small.render(f"Host: {host_name} (Team {host_team})", True, _STATUS_COLOR)
+        self.screen.blit(s, (cx - s.get_width() // 2, y_start + 48))
 
     def _draw(self) -> None:
         self.screen.fill(MENU_BG)
@@ -433,6 +488,10 @@ class MultiplayerLobbyScreen(BaseScreen):
                 st = font.render(self._join_status, True, _STATUS_COLOR)
                 self.screen.blit(st, (cx - st.get_width() // 2, 390))
 
+            # Show lobby settings from host (when connected)
+            if self._client_obj and self._client_obj.connected:
+                self._draw_lobby_settings(self._client_obj, 430)
+
         elif self._mode == "online":
             title = font_h.render("Play Online", True, CONTENT_TEXT)
             self.screen.blit(title, (cx - title.get_width() // 2, 50))
@@ -462,5 +521,9 @@ class MultiplayerLobbyScreen(BaseScreen):
             elif self._online_status:
                 st = font.render(self._online_status, True, _SUCCESS_COLOR)
                 self.screen.blit(st, (cx - st.get_width() // 2, status_y))
+
+            # Show lobby settings from server (when connected)
+            if self._online_client and self._online_client.connected:
+                self._draw_lobby_settings(self._online_client, status_y + 40)
 
         pygame.display.flip()

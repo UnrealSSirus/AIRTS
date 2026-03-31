@@ -27,6 +27,7 @@ from config.settings import (
     REACTIVE_ARMOR_COLOR, ELECTRIC_ARMOR_COLOR,
 )
 from core.camera import Camera
+from config import audio
 from config.unit_types import UNIT_TYPES, get_spawnable_types
 from ui.widgets import _get_font, Slider, Button
 import gui
@@ -699,7 +700,10 @@ class ClientGameScreen(BaseScreen):
     # -- result -------------------------------------------------------------
 
     def _build_result(self) -> ScreenResult:
-        self._client.stop()
+        if self._is_local:
+            self._client.stop()
+        else:
+            self._client.reset()
         # Build team_names from player_names / player_team, supporting N teams
         team_names: dict[int, str] = {}
         if self._player_names and self._client.player_team:
@@ -775,6 +779,7 @@ class ClientGameScreen(BaseScreen):
             else:
                 snd = self._sounds.get("fast_laser")
             if snd:
+                snd.set_volume(audio.master_volume)
                 snd.play()
 
     # -- animations ---------------------------------------------------------
@@ -1043,7 +1048,10 @@ class ClientGameScreen(BaseScreen):
         fps_font = _get_font(18)
         fps_val = self.clock.get_fps()
         fps_surf = fps_font.render(f"FPS: {fps_val:.0f}", True, (200, 200, 200))
-        self.screen.blit(fps_surf, (team_label.get_width() + 20, 12))
+        fps_x = team_label.get_width() + 20
+        if self._reset_cam_btn:
+            fps_x = self._reset_cam_btn.rect.right + 10
+        self.screen.blit(fps_surf, (fps_x, 12))
 
         # Local game controls in header
         if self._is_local:
