@@ -108,6 +108,11 @@ class ClientGameScreen(BaseScreen):
         self._tick: int = 0
         self._winner: int = 0
 
+        # Movement extrapolation state
+        self._last_server_positions: dict[int, tuple[float, float]] = {}
+        self._unit_velocities: dict[int, tuple[float, float]] = {}
+        self._extrap_dt: float = 0.0
+
         # Local selection
         self._selected_ids: set[int] = set()
         self._dragging = False
@@ -235,6 +240,7 @@ class ClientGameScreen(BaseScreen):
         while True:
             dt = self.clock.tick(60) / 1000.0
             self._anim_timer += dt
+            self._extrap_dt += dt
 
             # Poll for new state from host
             frame = self._client.poll_state()
@@ -249,6 +255,8 @@ class ClientGameScreen(BaseScreen):
                     self._disconnect_timer = 0.0
                     # Play sounds from server events
                     self._play_sound_events(frame.get("sounds", []))
+                    # Recompute movement extrapolation state
+                    self._update_extrapolation(self._entities)
                 elif msg_type == "game_over":
                     self._winner = frame.get("winner", 0)
             else:
@@ -818,6 +826,58 @@ class ClientGameScreen(BaseScreen):
             data={"paused": self._paused},
         ))
 
+    # -- movement extrapolation ----------------------------------------------
+
+    def _update_extrapolation(self, entities: list[dict]) -> None:
+        """Recompute velocity predictions from the latest server frame."""
+        positions: dict[int, tuple[float, float]] = {}
+        velocities: dict[int, tuple[float, float]] = {}
+        for ent in entities:
+            if ent.get("t") != "U":
+                continue
+            eid = ent.get("id")
+            if eid is None:
+                continue
+            ex = ent.get("x", 0.0)
+            ey = ent.get("y", 0.0)
+            positions[eid] = (ex, ey)
+            # Determine movement target: move target first, then attack target
+            tx = ent.get("tx")
+            ty = ent.get("ty")
+            if tx is None or ty is None:
+                tx = ent.get("atx")
+                ty = ent.get("aty")
+            if tx is not None and ty is not None:
+                dx = tx - ex
+                dy = ty - ey
+                dist = math.hypot(dx, dy)
+                if dist > 0.5:
+                    speed = UNIT_TYPES.get(ent.get("ut", ""), {}).get("speed", 0)
+                    velocities[eid] = (dx / dist * speed, dy / dist * speed)
+                    continue
+            velocities[eid] = (0.0, 0.0)
+        self._last_server_positions = positions
+        self._unit_velocities = velocities
+        self._extrap_dt = 0.0
+
+    def _apply_extrapolation(self, entities: list[dict]) -> list[dict]:
+        """Return entity list with unit positions extrapolated forward."""
+        dt = self._extrap_dt
+        if dt <= 0:
+            return entities
+        result: list[dict] = []
+        for ent in entities:
+            eid = ent.get("id")
+            if ent.get("t") == "U" and eid in self._unit_velocities:
+                vx, vy = self._unit_velocities[eid]
+                if vx != 0.0 or vy != 0.0:
+                    sx, sy = self._last_server_positions.get(eid, (ent.get("x", 0), ent.get("y", 0)))
+                    ent = dict(ent)
+                    ent["x"] = sx + vx * dt
+                    ent["y"] = sy + vy * dt
+            result.append(ent)
+        return result
+
     # -- sound effects ------------------------------------------------------
 
     def _play_sound_events(self, events: list[str]) -> None:
@@ -935,7 +995,10 @@ class ClientGameScreen(BaseScreen):
 
         # Sort entities by type for layering
         order = {"MS": 0, "ME": 1, "CC": 2, "U": 3}
-        entities = sorted(self._entities,
+        draw_entities = self._entities
+        if display_config.movement_smoothing:
+            draw_entities = self._apply_extrapolation(draw_entities)
+        entities = sorted(draw_entities,
                           key=lambda e: order.get(e.get("t", ""), 4))
 
         is_warp_in = self._phase == "warp_in"
