@@ -240,7 +240,8 @@ class ClientGameScreen(BaseScreen):
         while True:
             dt = self.clock.tick(60) / 1000.0
             self._anim_timer += dt
-            self._extrap_dt += dt
+            if not self._paused:
+                self._extrap_dt += dt
 
             # Poll for new state from host
             frame = self._client.poll_state()
@@ -257,6 +258,8 @@ class ClientGameScreen(BaseScreen):
                     self._play_sound_events(frame.get("sounds", []))
                     # Recompute movement extrapolation state
                     self._update_extrapolation(self._entities)
+                    # Rebuild T2 upgrade display from entity state
+                    self._refresh_t2_display()
                 elif msg_type == "game_over":
                     self._winner = frame.get("winner", 0)
             else:
@@ -272,10 +275,7 @@ class ClientGameScreen(BaseScreen):
                 # Close escape menu if game ended naturally
                 if self._esc_menu_open:
                     self._esc_menu_open = False
-                    if self._is_local and self._paused:
-                        self._toggle_pause()
-                    else:
-                        pygame.event.set_grab(True)
+                    pygame.event.set_grab(True)
                 # Build fragments from losing CCs
                 losing_teams = self._all_teams - {self._winner} if self._winner > 0 else set()
                 for _lt in losing_teams:
@@ -297,13 +297,10 @@ class ClientGameScreen(BaseScreen):
                     self._client.stop()
                     return ScreenResult("quit")
 
-                # ESC toggles the escape menu
+                # ESC toggles the escape menu (without pausing)
                 if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                     self._esc_menu_open = not self._esc_menu_open
-                    if self._is_local:
-                        self._toggle_pause()
-                    else:
-                        pygame.event.set_grab(not self._esc_menu_open)
+                    pygame.event.set_grab(not self._esc_menu_open)
                     continue
 
                 # When escape menu is open, only handle menu button clicks
@@ -312,10 +309,7 @@ class ClientGameScreen(BaseScreen):
                         if btn.handle_event(event):
                             if action == "resume":
                                 self._esc_menu_open = False
-                                if self._is_local:
-                                    self._toggle_pause()
-                                else:
-                                    pygame.event.set_grab(True)
+                                pygame.event.set_grab(True)
                             elif action == "surrender":
                                 if self._winner == 0:
                                     other = self._all_teams - {self._my_team}
@@ -828,6 +822,42 @@ class ClientGameScreen(BaseScreen):
 
     # -- movement extrapolation ----------------------------------------------
 
+    @staticmethod
+    def _effective_speed(ent: dict) -> float:
+        """Compute effective unit speed accounting for ability modifiers."""
+        base = UNIT_TYPES.get(ent.get("ut", ""), {}).get("speed", 0)
+        if base <= 0:
+            return 0.0
+        mult = 1.0
+        for ab in ent.get("abs", []):
+            name = ab.get("n")
+            if name == "focus":
+                timer = ab.get("tm", 0.0)
+                if timer > 0:
+                    t = timer / 3.0
+                    mult *= 0.25 + 0.75 * (1.0 - t)
+            elif name == "electric_armor":
+                stacks = ab.get("s", 0)
+                mult *= 1.0 + 0.10 * stacks
+            elif name == "combat_stim" and ab.get("a"):
+                missing = max(0.0, ent.get("mhp", 0) - ent.get("hp", 0))
+                stacks = int(missing / 10.0)
+                mult *= 1.0 + 0.05 * stacks
+        return base * mult
+
+    def _refresh_t2_display(self) -> None:
+        """Rebuild T2 upgrade display set from raw entity dicts."""
+        t2: dict[int, set[str]] = {}
+        for ent in self._entities:
+            if ent.get("t") != "ME":
+                continue
+            us = ent.get("us", "base")
+            rut = ent.get("rut", "") or None
+            if rut and us in ("research_lab", "upgrading_lab"):
+                team = ent.get("tm", 0)
+                t2.setdefault(team, set()).add(rut)
+        self._t2_upgrades = t2
+
     def _update_extrapolation(self, entities: list[dict]) -> None:
         """Recompute velocity predictions from the latest server frame."""
         positions: dict[int, tuple[float, float]] = {}
@@ -852,7 +882,7 @@ class ClientGameScreen(BaseScreen):
                 dy = ty - ey
                 dist = math.hypot(dx, dy)
                 if dist > 0.5:
-                    speed = UNIT_TYPES.get(ent.get("ut", ""), {}).get("speed", 0)
+                    speed = self._effective_speed(ent)
                     velocities[eid] = (dx / dist * speed, dy / dist * speed)
                     continue
             velocities[eid] = (0.0, 0.0)
@@ -1236,7 +1266,7 @@ class ClientGameScreen(BaseScreen):
 
         # Title above buttons
         font = _get_font(48)
-        title_surf = font.render("PAUSED", True, (220, 220, 240))
+        title_surf = font.render("MENU", True, (220, 220, 240))
         tx = self.width // 2 - title_surf.get_width() // 2
         first_btn_y = self._esc_menu_btns[0][1].rect.top
         ty = first_btn_y - title_surf.get_height() - 16
@@ -1301,6 +1331,12 @@ class ClientGameScreen(BaseScreen):
             return
 
         if t == "ME":
+            if ent.get("us") == "watch_tower":
+                from config.settings import WATCH_TOWER_LASER_RANGE
+                atk_r = int(WATCH_TOWER_LASER_RANGE)
+                temp = pygame.Surface((atk_r * 2, atk_r * 2), pygame.SRCALPHA)
+                pygame.draw.circle(temp, RANGE_COLOR, (atk_r, atk_r), atk_r, 1)
+                ws.blit(temp, (int(ex) - atk_r, int(ey) - atk_r))
             return
 
         weapon = stats.get("weapon")

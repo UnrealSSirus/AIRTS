@@ -1112,8 +1112,14 @@ class ReplayPlaybackScreen(BaseScreen):
             ws.blit(temp2, (int(ex) - atk_r, int(ey) - atk_r))
             return
 
-        # ME: no weapon, skip
+        # ME: only watch tower has a range circle
         if t == "ME":
+            if ent.get("us") == "watch_tower":
+                from config.settings import WATCH_TOWER_LASER_RANGE
+                atk_r = int(WATCH_TOWER_LASER_RANGE)
+                temp = pygame.Surface((atk_r * 2, atk_r * 2), pygame.SRCALPHA)
+                pygame.draw.circle(temp, RANGE_COLOR, (atk_r, atk_r), atk_r, 1)
+                ws.blit(temp, (int(ex) - atk_r, int(ey) - atk_r))
             return
 
         # Unit: draw FOV arc

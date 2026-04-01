@@ -287,6 +287,8 @@ class Game:
 
         # T2 upgrade tracking: team → set of unit_type strings upgraded to T2
         self._t2_upgrades: dict[int, set[str]] = {t: set() for t in self.all_teams}
+        # T2 in-progress tracking: unit types currently being researched
+        self._t2_researching: dict[int, set[str]] = {t: set() for t in self.all_teams}
 
         self._apply_selectability()
         self._bind_and_start_ais()
@@ -382,9 +384,18 @@ class Game:
         """Rebuild T2 upgrade sets from living Research Labs."""
         for t in self.all_teams:
             self._t2_upgrades[t] = set()
+            self._t2_researching[t] = set()
         for me in self.metal_extractors:
-            if me.alive and me.upgrade_state == "research_lab" and me.researched_unit_type:
-                self._t2_upgrades[me.team].add(me.researched_unit_type)
+            if me.alive and me.researched_unit_type:
+                if me.upgrade_state == "research_lab":
+                    self._t2_upgrades[me.team].add(me.researched_unit_type)
+                elif me.upgrade_state == "upgrading_lab":
+                    self._t2_researching[me.team].add(me.researched_unit_type)
+
+    def _get_t2_display(self) -> dict[int, set[str]]:
+        """Combined T2 upgrades + in-progress research for GUI display."""
+        return {t: self._t2_upgrades.get(t, set()) | self._t2_researching.get(t, set())
+                for t in self.all_teams}
 
     def _bind_and_start_ais(self):
         for pid, ai in self.player_ai.items():
@@ -768,7 +779,7 @@ class Game:
                     hud_result = gui.handle_hud_click(
                         self.entities, event.pos[0], event.pos[1],
                         self._screen_width, self._screen_height, self._hud_h,
-                        enable_t2=self.enable_t2, t2_upgrades=self._t2_upgrades,
+                        enable_t2=self.enable_t2, t2_upgrades=self._get_t2_display(),
                     )
                     if hud_result is not None:
                         self._handle_hud_action(hud_result)
@@ -906,8 +917,7 @@ class Game:
                     and entity.alive
                     and entity.upgrade_state == "choosing_research"
                     and entity.team == self.player_team.get(cmd.player_id)
-                    and self.enable_t2
-                    and unit_type not in self._t2_upgrades.get(entity.team, set())):
+                    and self.enable_t2):
                 entity.researched_unit_type = unit_type
                 entity.start_upgrade("lab")
 
@@ -1538,7 +1548,7 @@ class Game:
         if self._has_human:
             gui.draw_hud(self.screen, self.entities,
                          self._screen_width, self._screen_height, self._hud_h,
-                         enable_t2=self.enable_t2, t2_upgrades=self._t2_upgrades,
+                         enable_t2=self.enable_t2, t2_upgrades=self._get_t2_display(),
                          camera=self._camera, world_w=self.width, world_h=self.height)
 
         # Paused overlay (centered on game area) — only when escape menu is not open
@@ -2052,7 +2062,8 @@ class Game:
                     # Still broadcast current state so clients stay in sync
                     if post_step:
                         post_step(self._iteration, self.entities,
-                                  self.laser_flashes, self._winner)
+                                  self.laser_flashes, self._winner,
+                                  getattr(self, '_sound_events', []))
                     next_tick = time.perf_counter()
                     continue
 
@@ -2078,7 +2089,8 @@ class Game:
 
                 if post_step:
                     post_step(self._iteration, self.entities,
-                              self.laser_flashes, self._winner)
+                              self.laser_flashes, self._winner,
+                              getattr(self, '_sound_events', []))
 
                 # If phase transitioned to explode, the game is over
                 if self._phase == "explode":
