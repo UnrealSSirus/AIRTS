@@ -66,6 +66,19 @@ class OptionsScreen(BaseScreen):
             btn_h=32,
         )
 
+        # Movement smoothing toggle
+        ms_idx = 0 if display_config.movement_smoothing else 1
+        self._smoothing_toggle = ToggleGroup(
+            self.width // 2 - 145, self.height // 2 + 270,
+            [
+                ("on", "Enabled"),
+                ("off", "Disabled"),
+            ],
+            selected_index=ms_idx,
+            btn_w=140,
+            btn_h=32,
+        )
+
     def _apply_display_mode(self):
         mode = self._display_toggle.value
         display_config.set_mode(mode)
@@ -84,6 +97,8 @@ class OptionsScreen(BaseScreen):
         self._color_toggle.y = self.height // 2 + 110
         self._selection_toggle.x = self.width // 2 - 145
         self._selection_toggle.y = self.height // 2 + 190
+        self._smoothing_toggle.x = self.width // 2 - 145
+        self._smoothing_toggle.y = self.height // 2 + 270
 
     def run(self) -> ScreenResult:
         while True:
@@ -110,6 +125,10 @@ class OptionsScreen(BaseScreen):
                 if self._selection_toggle.handle_event(event):
                     display_config.set_selection_mode(self._selection_toggle.value)
 
+                if self._smoothing_toggle.handle_event(event):
+                    display_config.set_movement_smoothing(
+                        self._smoothing_toggle.value == "on")
+
             self._draw()
 
     def _draw(self):
@@ -135,11 +154,16 @@ class OptionsScreen(BaseScreen):
         self.screen.blit(sm_label, (self.width // 2 - sm_label.get_width() // 2,
                                     self._selection_toggle.y - 24))
 
+        ms_label = label_font.render("Movement Smoothing", True, CONTENT_TEXT)
+        self.screen.blit(ms_label, (self.width // 2 - ms_label.get_width() // 2,
+                                    self._smoothing_toggle.y - 24))
+
         # Widgets
         self._back.draw(self.screen)
         self._volume_slider.draw(self.screen)
         self._display_toggle.draw(self.screen)
         self._color_toggle.draw(self.screen)
         self._selection_toggle.draw(self.screen)
+        self._smoothing_toggle.draw(self.screen)
 
         pygame.display.flip()

@@ -98,8 +98,9 @@ def _make_proxy(d: dict, selected_ids: set[int]) -> _EntityProxy:
         p.upgrade_timer = 0.0
         utt = d.get("utt", 0.0)
         if p.upgrade_state.startswith("upgrading") and utt < 1.0:
-            from config.settings import T2_UPGRADE_DURATION
-            p.upgrade_timer = (1.0 - utt) * T2_UPGRADE_DURATION
+            from config.settings import WATCH_TOWER_UPGRADE_DURATION, RESEARCH_LAB_UPGRADE_DURATION
+            _dur = WATCH_TOWER_UPGRADE_DURATION if p.upgrade_state == "upgrading_tower" else RESEARCH_LAB_UPGRADE_DURATION
+            p.upgrade_timer = (1.0 - utt) * _dur
         p.researched_unit_type = d.get("rut", "") or None
         p.is_fully_reinforced = d.get("ifr", False)
         _meb = d.get("meb", 0)

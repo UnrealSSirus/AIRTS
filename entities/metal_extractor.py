@@ -6,12 +6,14 @@ from config.settings import (
     METAL_SPOT_CAPTURE_RADIUS,
     SELECTED_COLOR,
     TEAM_COLORS, PLAYER_COLORS,
-    T2_UPGRADE_DURATION,
+    WATCH_TOWER_UPGRADE_DURATION,
+    RESEARCH_LAB_UPGRADE_DURATION,
     T2_SPAWN_BONUS,
     WATCH_TOWER_HEAL_PER_SEC,
     WATCH_TOWER_LASER_RANGE,
     WATCH_TOWER_LASER_DAMAGE,
     WATCH_TOWER_LASER_COOLDOWN,
+    WATCH_TOWER_HP_BONUS,
     RESEARCH_LAB_HP_BONUS,
 )
 from entities.unit import Unit
@@ -55,13 +57,18 @@ class MetalExtractor(Unit):
         return bonus
 
     def start_upgrade(self, path: str):
-        """Begin the 60-second upgrade. path is 'tower' or 'lab'."""
+        """Begin the upgrade. path is 'tower' or 'lab'."""
         self.upgrade_state = f"upgrading_{path}"
-        self.upgrade_timer = T2_UPGRADE_DURATION
+        if path == "tower":
+            self.upgrade_timer = WATCH_TOWER_UPGRADE_DURATION
+        else:
+            self.upgrade_timer = RESEARCH_LAB_UPGRADE_DURATION
 
     def _finish_watch_tower(self):
         self.upgrade_state = "watch_tower"
         self.upgrade_timer = 0.0
+        self.max_hp += WATCH_TOWER_HP_BONUS
+        self.hp += WATCH_TOWER_HP_BONUS
         color = PLAYER_COLORS[(self.player_id - 1) % len(PLAYER_COLORS)] if self.player_id >= 1 else PLAYER_COLORS[0]
         self.weapon = Weapon(
             name="Laser",
@@ -181,7 +188,8 @@ class MetalExtractor(Unit):
 
     def _draw_upgrade_progress(self, surface: pygame.Surface):
         """Draw a progress arc around the extractor during upgrade."""
-        progress = 1.0 - max(0.0, self.upgrade_timer / T2_UPGRADE_DURATION)
+        duration = WATCH_TOWER_UPGRADE_DURATION if self.upgrade_state == "upgrading_tower" else RESEARCH_LAB_UPGRADE_DURATION
+        progress = 1.0 - max(0.0, self.upgrade_timer / duration)
         if progress <= 0:
             return
         arc_r = METAL_SPOT_CAPTURE_RADIUS + 2

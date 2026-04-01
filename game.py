@@ -41,6 +41,7 @@ from core.vectorized import build_obstacle_arrays, batch_obstacle_push, batch_un
 from core.quadfield import QuadField
 from core.camera import Camera
 import numpy as np
+import config.audio as audio
 
 try:
     from core.fast_collisions import collision_pass as _cy_collision_pass
@@ -1122,12 +1123,20 @@ class Game:
         self._stats.record_subsystem("capture", (_perf() - _t) * 1000)
 
         _t = _perf()
+        self._sound_events: list[str] = []
         combat_step(alive_units, obstacles, self.laser_flashes, dt,
                     quadfield=self._quadfield,
                     circle_obs=self._obs_circle, rect_obs=self._obs_rect,
                     splash_effects=None if self._headless else self.splash_effects,
-                    sounds=None if self._headless else self._sounds,
+                    sound_events=self._sound_events,
                     pending_chains=self._pending_chains, stats=self._stats)
+        # Play sounds locally for non-headless games (bot-vs-bot spectating)
+        if not self._headless and self._sounds:
+            for snd_name in self._sound_events:
+                snd = self._sounds.get(snd_name)
+                if snd is not None:
+                    snd.set_volume(audio.master_volume)
+                    snd.play()
         self._stats.record_subsystem("combat", (_perf() - _t) * 1000)
 
         # Spawn — spawn_step already appends to self.units; add to team lists
@@ -1987,8 +1996,8 @@ class Game:
         """Run the game loop for a dedicated server — no display, real-time 60Hz.
 
         *pre_step* is called before each tick (e.g. to inject remote commands).
-        *post_step(tick, entities, laser_flashes, winner)* is called after each
-        tick (e.g. to broadcast state to clients).
+        *post_step(tick, entities, laser_flashes, winner, sound_events)* is
+        called after each tick (e.g. to broadcast state to clients).
         """
         # On Windows, increase timer resolution from ~15.6ms to ~1ms so that
         # time.sleep() is accurate enough for a 60Hz game loop.
@@ -2016,7 +2025,8 @@ class Game:
                 self._apply_command(cmd)
             if post_step:
                 post_step(self._iteration, self.entities,
-                          self.laser_flashes, self._winner)
+                          self.laser_flashes, self._winner,
+                          getattr(self, '_sound_events', []))
             time.sleep(0.016)
 
         # Set CCs ready to spawn on first tick

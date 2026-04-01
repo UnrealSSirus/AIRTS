@@ -184,10 +184,11 @@ class DedicatedServer:
         def pre_step():
             host.inject_remote_commands()
 
-        def post_step(tick, entities, laser_flashes, winner):
+        def post_step(tick, entities, laser_flashes, winner, sound_events=None):
             host.broadcast_state(
                 tick, entities, laser_flashes, winner,
                 splash_effects=game.splash_effects,
+                sound_events=sound_events,
             )
 
         result = game.run_server(pre_step=pre_step, post_step=post_step)

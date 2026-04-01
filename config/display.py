@@ -10,11 +10,12 @@ _SETTINGS_PATH = app_path("display_settings.json")
 display_mode: str = "windowed_fullscreen"
 color_mode: str = "player"          # "player" or "team"
 selection_mode: str = "rectangle"   # "rectangle" or "circle"
+movement_smoothing: bool = True     # client-side movement extrapolation
 
 
 def load_settings() -> None:
     """Load display settings from disk."""
-    global display_mode, color_mode, selection_mode
+    global display_mode, color_mode, selection_mode, movement_smoothing
     try:
         with open(_SETTINGS_PATH, "r") as f:
             data = json.load(f)
@@ -27,6 +28,7 @@ def load_settings() -> None:
         sm = data.get("selection_mode", "rectangle")
         if sm in ("rectangle", "circle"):
             selection_mode = sm
+        movement_smoothing = bool(data.get("movement_smoothing", True))
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         pass
 
@@ -39,6 +41,7 @@ def save_settings() -> None:
                 "display_mode": display_mode,
                 "color_mode": color_mode,
                 "selection_mode": selection_mode,
+                "movement_smoothing": movement_smoothing,
             }, f, indent=2)
     except OSError:
         pass
@@ -66,6 +69,13 @@ def set_selection_mode(mode: str) -> None:
     if mode in ("rectangle", "circle"):
         selection_mode = mode
         save_settings()
+
+
+def set_movement_smoothing(enabled: bool) -> None:
+    """Update movement smoothing and save."""
+    global movement_smoothing
+    movement_smoothing = enabled
+    save_settings()
 
 
 def create_display() -> pygame.Surface:

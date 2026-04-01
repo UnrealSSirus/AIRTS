@@ -41,11 +41,27 @@ class MetalSpot(CircleEntity, Damageable):
 
         if has_majority:
             net = dominant_count - others_count
-            prog = self.capture_progress.get(dominant_team, 0.0)
-            prog += net * METAL_SPOT_CAPTURE_RATE * dt
-            self.capture_progress[dominant_team] = min(1.0, prog)
+            gain = net * METAL_SPOT_CAPTURE_RATE * dt
 
-        # Decay non-dominant teams' progress
+            # First drain any existing progress from other teams
+            for tid in list(self.capture_progress):
+                if tid == dominant_team or gain <= 0:
+                    continue
+                old_val = self.capture_progress[tid]
+                drain = min(old_val, gain)
+                old_val -= drain
+                gain -= drain
+                if old_val <= 0.0:
+                    del self.capture_progress[tid]
+                else:
+                    self.capture_progress[tid] = old_val
+
+            # Remaining gain goes to the dominant team's progress
+            if gain > 0:
+                prog = self.capture_progress.get(dominant_team, 0.0)
+                self.capture_progress[dominant_team] = min(1.0, prog + gain)
+
+        # Decay non-dominant teams' progress (slow passive decay)
         for tid in list(self.capture_progress):
             if tid == dominant_team and has_majority:
                 continue

@@ -11,7 +11,7 @@ from ui.theme import (
 )
 from ui.widgets import Button, ToggleGroup, MultiLineGraph, _get_font
 from config.unit_types import UNIT_TYPES
-from config.settings import METAL_EXTRACTOR_SPAWN_BONUS, TEAM_COLORS
+from config.settings import TEAM_COLORS
 
 # Player colour dots (matches lobby palette)
 _PLAYER_COLORS = [
@@ -263,10 +263,7 @@ class ResultsScreen(BaseScreen):
                 team_key = str(team_id)
                 data = teams_data.get(team_key, {}).get(key, [])
 
-                # Convert metal spots to build % bonus
-                if key == "metal_spots":
-                    bonus_pct = METAL_EXTRACTOR_SPAWN_BONUS * 100  # 8
-                    data = [v * bonus_pct for v in data]
+                # metal_spots data is already in build % (from stats sampling)
 
                 color_idx = (team_id - 1) % len(GRAPH_LINE_COLORS)
                 team_name = self._team_names.get(team_id, f"Team {team_id}")
@@ -283,7 +280,7 @@ class ResultsScreen(BaseScreen):
         # Per-tab formatting
         self._graph.y_suffix = "%" if key == "metal_spots" else ""
         self._graph.value_format = "{:.2f}" if key == "step_ms" else None
-        self._graph.y_tick_step = 8.0 if key == "metal_spots" else None
+        self._graph.y_tick_step = 10.0 if key == "metal_spots" else None
         self._graph.y_integer_ticks = key in ("army_count", "units_killed")
 
         self._graph.set_series(series, timestamps=timestamps)

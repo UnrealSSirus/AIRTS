@@ -215,10 +215,11 @@ class InternalServer:
         def pre_step():
             self._host.inject_remote_commands()
 
-        def post_step(tick, entities, laser_flashes, winner):
+        def post_step(tick, entities, laser_flashes, winner, sound_events=None):
             self._host.broadcast_state(
                 tick, entities, laser_flashes, winner,
                 splash_effects=game.splash_effects,
+                sound_events=sound_events,
             )
 
         try:

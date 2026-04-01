@@ -12,7 +12,7 @@ from config.settings import (
     PLAYER_COLORS, TEAM1_SELECTED_COLOR,
     HEALTH_BAR_FG, HEALTH_BAR_LOW, HEALTH_BAR_BG,
     CC_SPAWN_INTERVAL,
-    T2_UPGRADE_DURATION,
+    WATCH_TOWER_UPGRADE_DURATION, RESEARCH_LAB_UPGRADE_DURATION,
 )
 from config.unit_types import UNIT_TYPES, get_spawnable_types, get_t2_name
 from core.helpers import hexagon_points
@@ -699,7 +699,8 @@ def _draw_extractor_actions(screen: pygame.Surface, r: pygame.Rect,
         bar_w = min(r.width - 16, 180)
         bar_h = 8
         bar_y = r.top + 48
-        progress = 1.0 - max(0.0, me.upgrade_timer / T2_UPGRADE_DURATION)
+        _dur = WATCH_TOWER_UPGRADE_DURATION if me.upgrade_state == "upgrading_tower" else RESEARCH_LAB_UPGRADE_DURATION
+        progress = 1.0 - max(0.0, me.upgrade_timer / _dur)
         pygame.draw.rect(screen, (40, 40, 50), (r.left + 8, bar_y, bar_w, bar_h))
         pygame.draw.rect(screen, (200, 200, 60), (r.left + 8, bar_y, int(bar_w * progress), bar_h))
 
