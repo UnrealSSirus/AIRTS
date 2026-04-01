@@ -93,7 +93,7 @@ UNIT_TYPES = {
         "symbol": SCOUT_SYMBOL, "can_attack": True,
         "fov": 180, "turn_rate": 180, "los": 150,
         "spawn_count": 3,
-        "weapon": {"name": "Laser", "damage": 4, "range": 15, "cooldown": 0.5},
+        "weapon": {"name": "Laser", "damage": 4, "range": 40, "cooldown": 0.5},
     },
     "shockwave": {
         "hp": 70, "speed": 30, "radius": 5,
@@ -177,7 +177,7 @@ UNIT_TYPES = {
         "symbol": SCOUT_SYMBOL, "can_attack": True,
         "fov": 180, "turn_rate": 180, "los": 150,
         "spawn_count": 6,
-        "weapon": {"name": "Laser", "damage": 5, "range": 30, "cooldown": 0.3},
+        "weapon": {"name": "Laser", "damage": 5, "range": 50, "cooldown": 0.3},
         "is_t2": True,
     },
     "shockwave_t2": {

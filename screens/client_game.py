@@ -182,9 +182,6 @@ class ClientGameScreen(BaseScreen):
             ("lobby", Button(_mx, _my + 3 * (_mbh + _mgap), _mbw, _mbh, "Back to Lobby")),
         ]
 
-        # Previous laser set for detecting new lasers (for sound)
-        self._prev_laser_keys: set[tuple] = set()
-
         # Sound effects
         from core.paths import asset_path
         _sounds_dir = asset_path("sounds")
@@ -250,8 +247,8 @@ class ClientGameScreen(BaseScreen):
                     self._tick = frame.get("tick", 0)
                     self._winner = frame.get("winner", 0)
                     self._disconnect_timer = 0.0
-                    # Detect new lasers and play sounds
-                    self._play_laser_sounds()
+                    # Play sounds from server events
+                    self._play_sound_events(frame.get("sounds", []))
                 elif msg_type == "game_over":
                     self._winner = frame.get("winner", 0)
             else:
@@ -823,34 +820,13 @@ class ClientGameScreen(BaseScreen):
 
     # -- sound effects ------------------------------------------------------
 
-    def _play_laser_sounds(self) -> None:
-        """Detect new lasers by comparing to previous frame and play sounds."""
-        if not self._sounds:
+    def _play_sound_events(self, events: list[str]) -> None:
+        """Play sound effects sent by the server."""
+        if not self._sounds or not events:
             return
-        cur_keys: set[tuple] = set()
-        for lf in self._lasers:
-            if len(lf) >= 6:
-                # Use source position + target position as key
-                cur_keys.add((round(lf[0], 0), round(lf[1], 0),
-                              round(lf[2], 0), round(lf[3], 0)))
-        new_keys = cur_keys - self._prev_laser_keys
-        self._prev_laser_keys = cur_keys
-
-        for lf in self._lasers:
-            if len(lf) < 6:
-                continue
-            key = (round(lf[0], 0), round(lf[1], 0),
-                   round(lf[2], 0), round(lf[3], 0))
-            if key not in new_keys:
-                continue
-            width = lf[5]
-            if width >= 4:
-                snd = self._sounds.get("artillery")
-            elif width >= 2:
-                snd = self._sounds.get("laser")
-            else:
-                snd = self._sounds.get("fast_laser")
-            if snd:
+        for name in events:
+            snd = self._sounds.get(name)
+            if snd is not None:
                 snd.set_volume(audio.master_volume)
                 snd.play()
 

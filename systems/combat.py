@@ -10,7 +10,6 @@ from entities.weapon import Weapon
 from entities.command_center import CommandCenter
 from entities.laser import LaserFlash, SplashEffect
 from core.helpers import line_intersects_circle, line_intersects_rect
-import config.audio as audio
 
 if TYPE_CHECKING:
     from core.quadfield import QuadField
@@ -80,7 +79,7 @@ def combat_step(
     stats=None,
     circle_obs=None,
     rect_obs=None,
-    sounds=None,
+    sound_events: list[str] | None = None,
     pending_chains: list[PendingChain] | None = None,
     splash_effects: list[SplashEffect] | None = None,
 ):
@@ -198,11 +197,8 @@ def combat_step(
                                source=a, target=None,
                                duration=wpn.laser_flash_duration)
                 )
-                if sounds is not None:
-                    snd = sounds.get(wpn.sound)
-                    if snd is not None:
-                        snd.set_volume(audio.master_volume)
-                        snd.play()
+                if sound_events is not None:
+                    sound_events.append(wpn.sound)
             continue  # skip normal combat logic while charging or just fired
 
         # -- Normal combat logic ----------------------------------------------
@@ -299,11 +295,8 @@ def combat_step(
                                source=a, target=best_target,
                                duration=wpn.laser_flash_duration)
                 )
-                if sounds is not None:
-                    snd = sounds.get(wpn.sound)
-                    if snd is not None:
-                        snd.set_volume(audio.master_volume)
-                        snd.play()
+                if sound_events is not None:
+                    sound_events.append(wpn.sound)
             else:
                 # Immediate damage weapon
                 was_alive = best_target.alive
@@ -362,11 +355,8 @@ def combat_step(
                                source=a, target=best_target,
                                duration=wpn.laser_flash_duration)
                 )
-                if sounds is not None:
-                    snd = sounds.get(wpn.sound)
-                    if snd is not None:
-                        snd.set_volume(audio.master_volume)
-                        snd.play()
+                if sound_events is not None:
+                    sound_events.append(wpn.sound)
 
                 # Chain initiation
                 if pending_chains is not None and wpn.chain_range > 0 and a_dmg > 0:
@@ -435,11 +425,8 @@ def combat_step(
                     LaserFlash(ox, oy, best_next.x, best_next.y, lc, w,
                                source=chain.last_target, target=best_next)
                 )
-                if sounds is not None:
-                    snd = sounds.get(chain.weapon.sound)
-                    if snd is not None:
-                        snd.set_volume(audio.master_volume)
-                        snd.play()
+                if sound_events is not None:
+                    sound_events.append(chain.weapon.sound)
 
                 # Queue next bounce
                 chain.hit_set.add(best_next.entity_id)

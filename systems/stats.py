@@ -29,7 +29,8 @@ class TeamStats:
         self.ts_units_killed: list[int] = []
         self.ts_damage_dealt: list[float] = []
         self.ts_healing_done: list[float] = []
-        self.ts_metal_spots: list[int] = []
+        self.ts_metal_spots: list[int] = []    # legacy: extractor count
+        self.ts_build_pct: list[float] = []    # actual build % bonus
         self.ts_apm: list[float] = []
 
 
@@ -124,13 +125,16 @@ class GameStats:
                 self.ts_subsystems[name].append(0.0)
 
         for team_id, ts in self.teams.items():
-            # CC health
+            # CC health and build % bonus
             cc_hp = 0.0
+            build_pct = 0.0
             for e in entities:
                 if isinstance(e, CommandCenter) and e.alive and e.team == team_id:
                     cc_hp = e.hp
+                    build_pct = e.get_total_bonus_percent()
                     break
             ts.ts_cc_health.append(cc_hp)
+            ts.ts_build_pct.append(build_pct)
 
             # Army count (exclude buildings)
             army = sum(
@@ -204,7 +208,7 @@ class GameStats:
                 "units_killed": ts.ts_units_killed,
                 "damage_dealt": [round(v, 1) for v in ts.ts_damage_dealt],
                 "healing_done": [round(v, 1) for v in ts.ts_healing_done],
-                "metal_spots": ts.ts_metal_spots,
+                "metal_spots": ts.ts_build_pct,
                 "apm": ts.ts_apm,
             }
 

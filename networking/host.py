@@ -60,6 +60,7 @@ class GameHost:
         self._host_name = host_name
         self._max_players = max_players
         self._broadcast_interval = broadcast_interval
+        self._pending_sounds: list[str] = []
 
         # Cross-thread queues
         self._inbound_commands: queue.Queue[GameCommand] = queue.Queue()
@@ -209,8 +210,11 @@ class GameHost:
         laser_flashes: list,
         winner: int,
         splash_effects: list | None = None,
+        sound_events: list[str] | None = None,
     ) -> None:
         """Build a visual state frame and queue it for sending (every broadcast_interval)."""
+        if sound_events:
+            self._pending_sounds.extend(sound_events)
         if tick % self._broadcast_interval != 0:
             return
         ent_visuals = []
@@ -228,6 +232,9 @@ class GameHost:
         }
         if splash_effects:
             frame["splashes"] = [_splash_visual(s) for s in splash_effects]
+        if self._pending_sounds:
+            frame["sounds"] = self._pending_sounds
+            self._pending_sounds = []
         # Send to all connected clients
         with self._clients_lock:
             for c in self._clients.values():
@@ -398,6 +405,7 @@ class GameHost:
             if msg and msg.get("msg") == "join":
                 conn.name = msg.get("player_name", "Client")
                 conn.ready.set()
+                print(f"[Server] Player '{conn.name}' connected (id={player_id})")
 
             # Broadcast lobby status and settings to all clients
             await self._broadcast_lobby_status()
@@ -412,6 +420,8 @@ class GameHost:
         except (asyncio.IncompleteReadError, ConnectionError, OSError, ValueError):
             pass
         finally:
+            if conn.name:
+                print(f"[Server] Player '{conn.name}' disconnected (id={player_id})")
             conn.connected.clear()
             conn.ready.clear()
             with self._clients_lock:

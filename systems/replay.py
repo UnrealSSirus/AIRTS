@@ -16,7 +16,7 @@ from entities.unit import Unit
 from entities.metal_spot import MetalSpot
 from entities.laser import LaserFlash, SplashEffect
 from entities.shapes import RectEntity, CircleEntity
-from config.settings import CC_SPAWN_INTERVAL, T2_UPGRADE_DURATION
+from config.settings import CC_SPAWN_INTERVAL, WATCH_TOWER_UPGRADE_DURATION, RESEARCH_LAB_UPGRADE_DURATION
 
 # How many game ticks between recorded frames (60 FPS game / 6 = ~10 FPS replay)
 RECORD_INTERVAL = 6
@@ -100,8 +100,9 @@ def _entity_visual(e: Entity) -> dict | None:
             d["rot"] = _q2(e.rotation)
             d["us"] = e.upgrade_state
             # Upgrade progress (0.0–1.0, 0 when not upgrading)
-            if e.upgrade_state.startswith("upgrading") and T2_UPGRADE_DURATION > 0:
-                d["utt"] = _q2(1.0 - e.upgrade_timer / T2_UPGRADE_DURATION)
+            if e.upgrade_state.startswith("upgrading"):
+                _dur = WATCH_TOWER_UPGRADE_DURATION if e.upgrade_state == "upgrading_tower" else RESEARCH_LAB_UPGRADE_DURATION
+                d["utt"] = _q2(1.0 - e.upgrade_timer / _dur) if _dur > 0 else 1.0
             else:
                 d["utt"] = 0.0
             d["rut"] = e.researched_unit_type or ""

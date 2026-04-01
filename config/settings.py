@@ -114,12 +114,14 @@ REINFORCE_STACK_INTERVAL = 15.0             # seconds per plating stack
 REINFORCE_MAX_STACKS = 4
 
 # -- T2 upgrade system -------------------------------------------------------
-T2_UPGRADE_DURATION = 60.0                  # seconds under construction (no spawn bonus)
+WATCH_TOWER_UPGRADE_DURATION = 30.0          # seconds to build watch tower
+RESEARCH_LAB_UPGRADE_DURATION = 60.0         # seconds to build research lab
 T2_SPAWN_BONUS = 0.20                       # 20% spawn bonus for Watch Tower / Research Lab
 WATCH_TOWER_HEAL_PER_SEC = 1.0
 WATCH_TOWER_LASER_RANGE = 65.0
 WATCH_TOWER_LASER_DAMAGE = 15
 WATCH_TOWER_LASER_COOLDOWN = 2.0
+WATCH_TOWER_HP_BONUS = 50
 RESEARCH_LAB_HP_BONUS = 100
 
 # -- health bars ------------------------------------------------------------
