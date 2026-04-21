@@ -225,6 +225,8 @@ class GameHost:
         team_visibility: dict | None = None,
         player_team: dict[int, int] | None = None,
         metal_spots: list | None = None,
+        server_tick_ms: float = 0.0,
+        server_tps: float = 0.0,
     ) -> None:
         """Build a visual state frame and queue it for sending (every broadcast_interval).
 
@@ -294,6 +296,8 @@ class GameHost:
                     "entities": ent_visuals,
                     "lasers": lf_list,
                     "winner": winner,
+                    "srv_ms": round(server_tick_ms, 2),
+                    "srv_tps": round(server_tps, 1),
                 }
                 if splash_list:
                     frame["splashes"] = splash_list
@@ -332,6 +336,8 @@ class GameHost:
                 "entities": ent_visuals,
                 "lasers": lf_list,
                 "winner": winner,
+                "srv_ms": round(server_tick_ms, 2),
+                "srv_tps": round(server_tps, 1),
             }
             if splash_list:
                 frame["splashes"] = splash_list

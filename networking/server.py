@@ -228,6 +228,8 @@ class DedicatedServer:
                 team_visibility=game._team_vision if game._fog_of_war else None,
                 player_team=dict(game.player_team) if game._fog_of_war else None,
                 metal_spots=game.metal_spots if game._fog_of_war else None,
+                server_tick_ms=getattr(game, "_server_tick_ms", 0.0),
+                server_tps=getattr(game, "_server_tps", 0.0),
             )
 
         result = game.run_server(pre_step=pre_step, post_step=post_step)

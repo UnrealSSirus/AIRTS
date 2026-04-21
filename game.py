@@ -5,6 +5,7 @@ import math
 import random
 import sys
 import time
+from collections import deque
 from typing import Any
 import pygame
 import pygame.sndarray
@@ -2805,6 +2806,15 @@ class Game:
         tick_interval = FIXED_DT / 1.0  # ~16.67ms at 60 ticks/sec
         next_tick = time.perf_counter()
 
+        # Server performance metrics — rolling window of the last ~1 second
+        # of ticks. Published as self._server_tick_ms (mean step duration)
+        # and self._server_tps (actual ticks per real second). Clients read
+        # these via the state-frame broadcast.
+        tick_ms_buf: deque[float] = deque(maxlen=60)
+        tick_ts_buf: deque[float] = deque(maxlen=61)
+        self._server_tick_ms = 0.0
+        self._server_tps = 0.0
+
         try:
             while self.running and self._phase == "playing":
                 now = time.perf_counter()
@@ -2847,7 +2857,17 @@ class Game:
 
                 next_tick += effective_interval
 
+                step_start = time.perf_counter()
                 self.step(FIXED_DT)
+                step_end = time.perf_counter()
+
+                tick_ms_buf.append((step_end - step_start) * 1000.0)
+                tick_ts_buf.append(step_end)
+                self._server_tick_ms = sum(tick_ms_buf) / len(tick_ms_buf)
+                if len(tick_ts_buf) >= 2:
+                    span = tick_ts_buf[-1] - tick_ts_buf[0]
+                    if span > 0:
+                        self._server_tps = (len(tick_ts_buf) - 1) / span
 
                 if post_step:
                     post_step(self._iteration, self.entities,
