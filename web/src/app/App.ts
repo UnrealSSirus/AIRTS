@@ -7,6 +7,7 @@ import type { Connection } from "../net/Connection";
 import { Screen, type Transition } from "./Screen";
 import { MainMenuScreen } from "../screens/MainMenuScreen";
 import { ConnectScreen } from "../screens/ConnectScreen";
+import { GuidesScreen } from "../screens/GuidesScreen";
 import { CreateLobbyScreen } from "../screens/CreateLobbyScreen";
 import { ClientGameScreen } from "../screens/ClientGameScreen";
 import { ResultsScreen } from "../screens/ResultsScreen";
@@ -42,6 +43,9 @@ export class App {
         break;
       case "connect":
         this.screen = new ConnectScreen(this);
+        break;
+      case "guides":
+        this.screen = new GuidesScreen(this);
         break;
       case "create_lobby":
         this.screen = new CreateLobbyScreen(this);

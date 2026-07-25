@@ -1769,6 +1769,9 @@ class Game:
                 aid = ed.get("attack_target_id")
                 if aid is not None and aid in id_map:
                     entity.attack_target = id_map[aid]
+                lid = ed.get("_lock_target_id")
+                if lid is not None and lid in id_map:
+                    entity._lock_target = id_map[lid]
                 # Resolve _target_ref in queued commands
                 for qcmd in entity.command_queue:
                     if qcmd.get("type") == "attack":

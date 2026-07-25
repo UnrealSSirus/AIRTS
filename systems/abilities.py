@@ -27,7 +27,12 @@ from config.settings import (
     DETECTION_RANGE_PER_STACK,
     DETECTION_RANGE_MAX_BONUS,
     DETECTION_COLOR,
+    COMBAT_STIM_MISSING_HP_PER_STACK,
+    COMBAT_STIM_COOLDOWN_REDUCTION,
+    COMBAT_STIM_SPEED_BONUS,
+    COMBAT_STIM_MIN_COOLDOWN,
 )
+from config.gamedata import ABILITY_DESCRIPTIONS
 import pygame
 
 
@@ -67,7 +72,7 @@ class PassiveAbility:
 
 class Reinforce(PassiveAbility):
     name = "reinforce"
-    description = "Builds plating over time. At full stacks, gains bonus HP and doubles spawn bonus."
+    description = ABILITY_DESCRIPTIONS["reinforce"]
 
     def __init__(self):
         super().__init__()
@@ -110,7 +115,7 @@ class Reinforce(PassiveAbility):
 
 class ReactiveArmor(PassiveAbility):
     name = "reactive_armor"
-    description = "Every 5s gain a charge (max 2). Each stack reduces incoming damage by 50%. Lose all stacks when hit."
+    description = ABILITY_DESCRIPTIONS["reactive_armor"]
 
     def __init__(self):
         super().__init__()
@@ -171,53 +176,25 @@ class ReactiveArmor(PassiveAbility):
         return obj
 
 
-class Focus(PassiveAbility):
-    name = "focus"
-    description = "After firing, speed drops to 25% and gradually recovers over 3 seconds."
+class LockOn(PassiveAbility):
+    name = "lock_on"
+    description = ABILITY_DESCRIPTIONS["lock_on"]
 
-    DURATION = 3.0
-    MIN_MULT = 0.25  # 25% speed immediately after firing
-
-    def __init__(self):
-        super().__init__()
-        self.timer: float = 0.0
-        self._base_speed: float = 0.0  # captured on first slow
-
-    def on_fire(self, entity) -> None:
-        if self._base_speed == 0.0:
-            self._base_speed = entity.speed
-        self.timer = self.DURATION
-        entity.speed = self._base_speed * self.MIN_MULT
-
-    def update(self, entity, dt: float) -> None:
-        if self.timer <= 0:
+    def draw(self, entity, surface: pygame.Surface) -> None:
+        # Targeting beam to the locked target, brightening as the lock completes.
+        tgt = getattr(entity, "_lock_target", None)
+        wpn = getattr(entity, "weapon", None)
+        if tgt is None or wpn is None or wpn.lock_on_time <= 0:
             return
-        self.timer = max(0.0, self.timer - dt)
-        # Lerp: MIN_MULT at timer=DURATION → 1.0 at timer=0
-        t = self.timer / self.DURATION
-        mult = self.MIN_MULT + (1.0 - self.MIN_MULT) * (1.0 - t)
-        entity.speed = self._base_speed * mult
-
-    def to_dict(self) -> dict:
-        d = super().to_dict()
-        d.update({
-            "timer": self.timer,
-            "_base_speed": self._base_speed,
-        })
-        return d
-
-    @classmethod
-    def from_dict(cls, data: dict) -> Focus:
-        obj = cls()
-        obj.active = data.get("active", False)
-        obj.timer = data.get("timer", 0.0)
-        obj._base_speed = data.get("_base_speed", 0.0)
-        return obj
+        frac = 1.0 - max(0.0, min(1.0, entity._lock_timer / wpn.lock_on_time))
+        color = (120 + int(135 * frac), 30, 30)
+        pygame.draw.line(surface, color,
+                         (entity.x, entity.y), (tgt.x, tgt.y), 1)
 
 
 class ElectricArmor(PassiveAbility):
     name = "electric_armor"
-    description = "Gains a stack every second (max 8). While stacks > 0: 60% damage reduction. Each stack: +1 HP/s regen, +20% speed. Loses one stack when hit."
+    description = ABILITY_DESCRIPTIONS["electric_armor"]
 
     def __init__(self):
         super().__init__()
@@ -295,9 +272,9 @@ class ElectricArmor(PassiveAbility):
 
 
 class CombatStim(PassiveAbility):
-    """For every 10 missing HP, gain -0.1 weapon cooldown and +5% movement speed."""
+    """For every N missing HP, gain reduced weapon cooldown and bonus speed."""
     name = "combat_stim"
-    description = "For every 10 missing HP: -0.1s cooldown, +5% speed."
+    description = ABILITY_DESCRIPTIONS["combat_stim"]
 
     def __init__(self):
         super().__init__()
@@ -312,15 +289,15 @@ class CombatStim(PassiveAbility):
             self._base_cooldown = entity.attack_cooldown_max
 
         missing = max(0.0, entity.max_hp - entity.hp)
-        stacks = int(missing / 10.0)
+        stacks = int(missing / COMBAT_STIM_MISSING_HP_PER_STACK)
 
         if stacks > 0:
             self.active = True
-            # Speed bonus: +5% per stack
-            entity.speed = self._base_speed * (1.0 + 0.05 * stacks)
-            # Cooldown reduction: -0.1s per stack (min 0.1s)
+            entity.speed = self._base_speed * (1.0 + COMBAT_STIM_SPEED_BONUS * stacks)
             if self._base_cooldown > 0:
-                entity.attack_cooldown_max = max(0.1, self._base_cooldown - 0.1 * stacks)
+                entity.attack_cooldown_max = max(
+                    COMBAT_STIM_MIN_COOLDOWN,
+                    self._base_cooldown - COMBAT_STIM_COOLDOWN_REDUCTION * stacks)
         else:
             self.active = False
             if self._base_speed > 0:
@@ -356,9 +333,7 @@ class CombatStim(PassiveAbility):
 class Overclock(PassiveAbility):
     """Allied metal extractors in range gain HP/s regen and an additive spawn bonus."""
     name = "overclock"
-    description = (
-        "Allied metal extractors in range gain HP regen and a small spawn boost."
-    )
+    description = ABILITY_DESCRIPTIONS["overclock"]
 
     # Set by Game each tick: tuple of all live MetalExtractor instances.
     all_metal_extractors: tuple = ()
@@ -433,10 +408,7 @@ class Detection(PassiveAbility):
     receiver when flushing `_detection_range_pending`).
     """
     name = "detection"
-    description = (
-        "Nearby allied sweepers stack LOS (+50 per sweeper, max +200). "
-        "Allied units in range gain +5 attack range per sweeper (max +20)."
-    )
+    description = ABILITY_DESCRIPTIONS["detection"]
 
     # Set by Game each tick — live sweeper list (all teams) and unit list.
     all_sweepers: tuple = ()
@@ -506,7 +478,7 @@ class Detection(PassiveAbility):
 ABILITY_REGISTRY: dict[str, type[PassiveAbility]] = {
     "reinforce": Reinforce,
     "reactive_armor": ReactiveArmor,
-    "focus": Focus,
+    "lock_on": LockOn,
     "electric_armor": ElectricArmor,
     "combat_stim": CombatStim,
     "overclock": Overclock,

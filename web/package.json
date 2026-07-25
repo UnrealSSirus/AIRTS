@@ -5,6 +5,7 @@
   "type": "module",
   "description": "Browser client for AIRTS (TypeScript + Canvas2D).",
   "scripts": {
+    "predev": "node scripts/sync-assets.mjs",
     "dev": "vite",
     "prebuild": "node scripts/sync-assets.mjs",
     "build": "tsc && vite build",

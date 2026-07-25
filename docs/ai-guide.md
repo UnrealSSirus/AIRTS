@@ -185,29 +185,37 @@ unit.fire_mode = HOLD_FIRE     # Never fire
 
 ### Tier 1
 
-| Type              | HP  | Speed | Radius | Damage | Range | Cooldown | Special                                        |
-|-------------------|-----|-------|--------|--------|-------|----------|------------------------------------------------|
-| `soldier`         | 100 | 40    | 5      | 10     | 50    | 1.5 s    | —                                              |
-| `medic`           | 50  | 40    | 5      | —      | 50    | 0.3 s    | Heal laser (friendly-only); heals ~3 HP/s      |
-| `tank`            | 250 | 20    | 7      | 7      | 50    | 2.0 s    | ReactiveArmor passive                          |
-| `sniper`          | 50  | 30    | 5      | 35     | 140   | 6.0 s    | Long range; Focus passive (slows after shot)   |
-| `machine_gunner`  | 70  | 40    | 5      | 1      | 50    | 0.1 s    | 10 shots/sec, low per-shot damage              |
-| `scout`           | 15  | 90    | 4      | 4      | 15    | 0.5 s    | Spawns 3 per cycle; short range                |
-| `shockwave`       | 70  | 30    | 5      | 7      | 60    | 3.0 s    | Chain laser bounces to enemies within 70 px    |
-| `artillery`       | 50  | 20    | 10     | 100    | 160   | 6.0 s    | Splash 40 px; friendly fire; 2 s charge time  |
+<!-- AUTOGEN:t1-units (regenerate with `python tools/gen_docs.py` — do not edit by hand) -->
+| Type | HP | Speed | Radius | Damage | Range | Cooldown | Special |
+|------|----|-------|--------|--------|-------|----------|---------|
+| `soldier` | 100 | 40 | 5 | 10 | 50 | 1.5 s | Basic all-rounder |
+| `medic` | 50 | 40 | 5 | — | 60 | 0.4 s | Support healer; **Heal Beam** |
+| `tank` | 250 | 20 | 7 | 8 | 45 | 2 s | Frontline damage soak; **Reactive Armor** |
+| `sniper` | 50 | 35 | 5 | 40 | 140 | 6 s | Long-range assassin; **Lock-On** |
+| `machine_gunner` | 70 | 40 | 5 | 4 | 50 | 0.4 s | Sustained rapid fire |
+| `scout` | 15 | 90 | 4 | 3 | 40 | 0.5 s | Fast, fragile swarmer; **Pack Hunter** |
+| `shockwave` | 70 | 30 | 5 | 8 | 60 | 3.5 s | Chain-laser crowd damage; **Chain Lightning** |
+| `artillery` | 50 | 20 | 7 | 50 | 160 | 6 s | Siege splash damage; **Charged Shot** |
+| `engineer` | 50 | 40 | 5 | 3 | 70 | 1 s | Economy support; **Overclock** |
+| `sweeper` | 30 | 30 | 3 | — | — | — | Vision support; **Detection** |
+<!-- /AUTOGEN:t1-units -->
 
 ### Tier 2
 
-| Type                  | HP  | Speed | Damage | Range | Cooldown | Key changes                                  |
-|-----------------------|-----|-------|--------|-------|----------|----------------------------------------------|
-| `soldier_t2`          | 125 | 42    | 15     | 55    | 1.4 s    | Better stats across the board                |
-| `medic_t2`            | 75  | 60    | —      | 70    | 0.2 s    | Faster, longer reach                         |
-| `tank_t2`             | 400 | 20    | 7      | 50    | 2.0 s    | More HP; ElectricArmor passive               |
-| `sniper_t2`           | 65  | 35    | 45     | 150   | 5.0 s    | More HP and damage, faster shots             |
-| `machine_gunner_t2`   | 80  | 30    | 3      | 75    | 0.1 s    | More HP, extended range, higher damage       |
-| `scout_t2`            | 12  | 110   | 5      | 30    | 0.3 s    | Spawns 6 per cycle                           |
-| `shockwave_t2`        | 50  | 30    | 15     | 90    | 3.0 s    | More damage; chain range 50 px               |
-| `artillery_t2`        | 120 | 15    | 100    | 180   | 6.0 s    | More HP; splash 75 px; charge 3 s            |
+<!-- AUTOGEN:t2-units -->
+| Type | HP | Speed | Damage | Range | Cooldown | Key changes vs T1 |
+|------|----|-------|--------|-------|----------|-------------------|
+| `soldier_t2` (Marine) | 125 | 40 | 12 | 60 | 1.5 s | +25 HP, +2 damage, +10 range, **Combat Stim** |
+| `medic_t2` (Priest) | 75 | 60 | — | 60 | 0.5 s | +25 HP, +20 speed, +6 heal, +0.1s cooldown |
+| `tank_t2` (Heavy Tank) | 400 | 20 | 10 | 50 | 2 s | +150 HP, +2 damage, +5 range, **Electric Armor** |
+| `sniper_t2` (Marksman) | 75 | 40 | 55 | 150 | 5 s | +25 HP, +5 speed, +15 damage, +10 range, -1s cooldown |
+| `machine_gunner_t2` (Plasma Beamer) | 80 | 40 | 6 | 60 | 0.4 s | +10 HP, +2 damage, +10 range |
+| `scout_t2` (Drone Swarm) | 12 | 110 | 5 | 50 | 0.5 s | -3 HP, +20 speed, +2 damage, +10 range, spawns 5 per cycle (was 3), **Swarm** |
+| `shockwave_t2` (Disruptor) | 50 | 30 | 15 | 80 | 3 s | -20 HP, +7 damage, +20 range, -0.5s cooldown, **Arc Lightning** |
+| `artillery_t2` (Mortar) | 75 | 15 | 70 | 180 | 6 s | +25 HP, -5 speed, +20 damage, +20 range, +20 splash radius |
+| `engineer_t2` (Mechanic) | 65 | 50 | 7 | 70 | 1 s | +15 HP, +10 speed, +4 damage |
+| `sweeper_t2` (Sweeper T2) | 30 | 30 | — | — | — | — |
+<!-- /AUTOGEN:t2-units -->
 
 T2 units require a **Research Lab** extractor upgrade on your team's side. Use `set_build("soldier_t2")` etc. once T2 is available.
 

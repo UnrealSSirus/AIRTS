@@ -149,6 +149,15 @@ def _entity_visual(e: Entity) -> dict | None:
                 weapon = getattr(e, "weapon", None)
                 total = weapon.charge_time if weapon and weapon.charge_time > 0 else 1.0
                 d["chp"] = _q2(1.0 - ct / total)
+            # Lock-on beam — reuses the charge-beam channel so clients render
+            # a targeting beam that brightens as the lock completes.
+            lt = getattr(e, "_lock_target", None)
+            if lt is not None:
+                d["chx"] = _q1(lt.x)
+                d["chy"] = _q1(lt.y)
+                weapon = getattr(e, "weapon", None)
+                total = weapon.lock_on_time if weapon and weapon.lock_on_time > 0 else 1.0
+                d["chp"] = _q2(1.0 - getattr(e, "_lock_timer", 0.0) / total)
             # Abilities (compact: list of {name, stacks?, timer?, active})
             abs_list = []
             for ab in getattr(e, "abilities", []):

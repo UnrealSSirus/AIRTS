@@ -93,7 +93,7 @@ AIRTS/
 │   │   ├── base.py             BaseAI abstract class
 │   │   ├── wander.py           Built-in WanderAI
 │   │   └── registry.py         Auto-discovers AIs from ais/ and systems/ai/
-│   ├── abilities.py            Passive ability system (ReactiveArmor, ElectricArmor, Focus, Reinforce)
+│   ├── abilities.py            Passive ability system (ReactiveArmor, ElectricArmor, LockOn, Reinforce)
 │   ├── commands.py             Command serialization layer (multiplayer-ready)
 │   ├── combat.py               Laser attacks, healing, chain/splash, CC aura
 │   ├── physics.py              Collision resolution, bounds clamping

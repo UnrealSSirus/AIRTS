@@ -24,15 +24,11 @@ export class Extrapolation {
   private effectiveSpeed(e: UnitEntity): number {
     const base = this.cfg.speedFor(e.ut);
     if (base <= 0) return 0;
+    // Lock-on / charge root: chx is set while the unit is rooted.
+    if (e.chx !== undefined) return 0;
     let mult = 1;
     for (const ab of e.abs ?? []) {
-      if (ab.n === "focus") {
-        const timer = ab.tm ?? 0;
-        if (timer > 0) {
-          const t = timer / 3;
-          mult *= 0.25 + 0.75 * (1 - t);
-        }
-      } else if (ab.n === "electric_armor") {
+      if (ab.n === "electric_armor") {
         mult *= 1 + 0.1 * (ab.s ?? 0);
       } else if (ab.n === "combat_stim" && ab.a) {
         const missing = Math.max(0, (e.mhp ?? 0) - (e.hp ?? 0));

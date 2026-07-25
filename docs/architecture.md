@@ -48,7 +48,7 @@ AIRTS/
     │   ├── base.py             BaseAI abstract class (ai_id, ai_name, player_id, team)
     │   ├── wander.py           WanderAI built-in implementation
     │   └── registry.py         AIRegistry — auto-discovers AIs from ais/ and systems/ai/
-    ├── abilities.py            Passive ability system (Reinforce, ReactiveArmor, ElectricArmor, Focus)
+    ├── abilities.py            Passive ability system (Reinforce, ReactiveArmor, ElectricArmor, LockOn)
     ├── commands.py             GameCommand + CommandQueue (serializable command layer)
     ├── combat.py               Laser attacks, medic healing, CC aura healing, splash/chain
     ├── physics.py              Collision resolution and bounds clamping
@@ -215,7 +215,7 @@ A composable system of `PassiveAbility` subclasses attached to entities:
 |-------|------|--------|
 | `ReactiveArmor` | Tank | Charges every 5 s (max 2); each charge reduces damage 50%; all charges lost on hit |
 | `ElectricArmor` | Tank T2 | Stack per second (max 8); 60% damage reduction + regen + speed per stack; −1 stack on hit |
-| `Focus` | Sniper | After firing, speed drops to 25% and recovers over 3 s |
+| `LockOn` | Sniper | Locks onto a target for 1.25 s before firing; the shot always fires once locked (even if the target dies); rooted while locking |
 | `Reinforce` | MetalExtractor | Builds plating stacks (4 stacks, 15 s each); at max: +100 HP, double spawn bonus |
 
 New abilities can be added by subclassing `PassiveAbility` and registering in `ABILITY_REGISTRY`.

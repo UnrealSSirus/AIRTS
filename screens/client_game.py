@@ -1300,15 +1300,14 @@ class ClientGameScreen(BaseScreen):
         base = UNIT_TYPES.get(ent.get("ut", ""), {}).get("speed", 0)
         if base <= 0:
             return 0.0
+        # Lock-on / charge root: server sends the targeting beam via chx/chy
+        # while the unit is rooted, so predicted velocity is zero.
+        if ent.get("chx") is not None:
+            return 0.0
         mult = 1.0
         for ab in ent.get("abs", []):
             name = ab.get("n")
-            if name == "focus":
-                timer = ab.get("tm", 0.0)
-                if timer > 0:
-                    t = timer / 3.0
-                    mult *= 0.25 + 0.75 * (1.0 - t)
-            elif name == "electric_armor":
+            if name == "electric_armor":
                 stacks = ab.get("s", 0)
                 mult *= 1.0 + 0.10 * stacks
             elif name == "combat_stim" and ab.get("a"):

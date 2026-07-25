@@ -1,0 +1,1130 @@
+{
+  "unit_types": {
+    "soldier": {
+      "hp": 100,
+      "speed": 40,
+      "radius": 5,
+      "symbol": null,
+      "can_attack": true,
+      "fov": 90,
+      "turn_rate": 90,
+      "los": 90,
+      "weapon": {
+        "name": "Laser",
+        "damage": 10,
+        "range": 50,
+        "cooldown": 1.5
+      }
+    },
+    "medic": {
+      "hp": 50,
+      "speed": 40,
+      "radius": 5,
+      "symbol": [
+        [
+          -4,
+          -12
+        ],
+        [
+          4,
+          -12
+        ],
+        [
+          4,
+          -4
+        ],
+        [
+          12,
+          -4
+        ],
+        [
+          12,
+          4
+        ],
+        [
+          4,
+          4
+        ],
+        [
+          4,
+          12
+        ],
+        [
+          -4,
+          12
+        ],
+        [
+          -4,
+          4
+        ],
+        [
+          -12,
+          4
+        ],
+        [
+          -12,
+          -4
+        ],
+        [
+          -4,
+          -4
+        ]
+      ],
+      "can_attack": true,
+      "fov": 30,
+      "turn_rate": 90,
+      "los": 80,
+      "weapon": {
+        "name": "HealLaser",
+        "damage": -2,
+        "range": 60,
+        "cooldown": 0.4,
+        "hits_only_friendly": true,
+        "laser_flash_duration": 0.2
+      }
+    },
+    "tank": {
+      "hp": 250,
+      "speed": 20,
+      "radius": 7,
+      "symbol": [
+        [
+          -4,
+          -12
+        ],
+        [
+          4,
+          -12
+        ],
+        [
+          12,
+          -4
+        ],
+        [
+          12,
+          4
+        ],
+        [
+          4,
+          12
+        ],
+        [
+          -4,
+          12
+        ],
+        [
+          -12,
+          4
+        ],
+        [
+          -12,
+          -4
+        ]
+      ],
+      "can_attack": true,
+      "fov": 150,
+      "turn_rate": 50,
+      "los": 60,
+      "weapon": {
+        "name": "Laser",
+        "damage": 8,
+        "range": 45,
+        "cooldown": 2.0
+      }
+    },
+    "sniper": {
+      "hp": 50,
+      "speed": 35,
+      "radius": 5,
+      "symbol": [
+        [
+          -4,
+          -12
+        ],
+        [
+          0,
+          -4
+        ],
+        [
+          4,
+          -12
+        ],
+        [
+          12,
+          -4
+        ],
+        [
+          4,
+          0
+        ],
+        [
+          12,
+          4
+        ],
+        [
+          4,
+          12
+        ],
+        [
+          0,
+          4
+        ],
+        [
+          -4,
+          12
+        ],
+        [
+          -12,
+          4
+        ],
+        [
+          -4,
+          0
+        ],
+        [
+          -12,
+          -4
+        ]
+      ],
+      "can_attack": true,
+      "fov": 35,
+      "turn_rate": 50,
+      "los": 125,
+      "weapon": {
+        "name": "Heavy Laser",
+        "damage": 40,
+        "range": 140,
+        "cooldown": 6.0,
+        "laser_width": 3,
+        "sound": "laser",
+        "lock_on_time": 1.25
+      }
+    },
+    "machine_gunner": {
+      "hp": 70,
+      "speed": 40,
+      "radius": 5,
+      "symbol": [
+        [
+          -10,
+          -10
+        ],
+        [
+          10,
+          -10
+        ],
+        [
+          10,
+          10
+        ],
+        [
+          -10,
+          10
+        ]
+      ],
+      "can_attack": true,
+      "fov": 60,
+      "turn_rate": 15,
+      "los": 80,
+      "weapon": {
+        "name": "Laser",
+        "damage": 4,
+        "range": 50,
+        "cooldown": 0.4,
+        "laser_flash_duration": 0.1
+      }
+    },
+    "scout": {
+      "hp": 15,
+      "speed": 90,
+      "radius": 4,
+      "symbol": [
+        [
+          0,
+          -12
+        ],
+        [
+          8,
+          4
+        ],
+        [
+          -8,
+          4
+        ]
+      ],
+      "can_attack": true,
+      "fov": 40,
+      "turn_rate": 120,
+      "los": 120,
+      "spawn_count": 3,
+      "weapon": {
+        "name": "Laser",
+        "damage": 3,
+        "range": 40,
+        "cooldown": 0.5,
+        "laser_flash_duration": 0.1
+      }
+    },
+    "shockwave": {
+      "hp": 70,
+      "speed": 30,
+      "radius": 5,
+      "symbol": [
+        [
+          0,
+          -12
+        ],
+        [
+          12,
+          0
+        ],
+        [
+          0,
+          12
+        ],
+        [
+          -12,
+          0
+        ]
+      ],
+      "can_attack": true,
+      "fov": 360,
+      "turn_rate": 180,
+      "los": 80,
+      "weapon": {
+        "name": "ChainLaser",
+        "damage": 8,
+        "range": 60,
+        "cooldown": 3.5,
+        "chain_range": 40.0,
+        "chain_delay": 0.1,
+        "laser_flash_duration": 0.5
+      }
+    },
+    "artillery": {
+      "hp": 50,
+      "speed": 20,
+      "radius": 7,
+      "symbol": [
+        [
+          0,
+          -12
+        ],
+        [
+          4.755,
+          -3.881
+        ],
+        [
+          11.417,
+          -3.804
+        ],
+        [
+          6.18,
+          1.902
+        ],
+        [
+          7.608,
+          9.511
+        ],
+        [
+          0,
+          5
+        ],
+        [
+          -7.608,
+          9.511
+        ],
+        [
+          -6.18,
+          1.902
+        ],
+        [
+          -11.417,
+          -3.804
+        ],
+        [
+          -4.755,
+          -3.881
+        ]
+      ],
+      "can_attack": true,
+      "fov": 15,
+      "turn_rate": 10,
+      "los": 150,
+      "weapon": {
+        "name": "ArtilleryCannon",
+        "damage": 50,
+        "range": 160,
+        "cooldown": 6.0,
+        "splash_radius": 40,
+        "splash_damage_max": 40,
+        "splash_damage_min": 1,
+        "charge_time": 2.5,
+        "friendly_fire": true,
+        "sound": "artillery",
+        "laser_width": 6,
+        "laser_flash_duration": 2.5
+      }
+    },
+    "engineer": {
+      "hp": 50,
+      "speed": 40,
+      "radius": 5,
+      "symbol": [
+        [
+          -12,
+          -8
+        ],
+        [
+          -8,
+          -12
+        ],
+        [
+          12,
+          8
+        ],
+        [
+          8,
+          12
+        ]
+      ],
+      "can_attack": true,
+      "fov": 360,
+      "turn_rate": 90,
+      "los": 90,
+      "weapon": {
+        "name": "Laser",
+        "damage": 3,
+        "range": 70,
+        "cooldown": 1.0,
+        "laser_flash_duration": 0.1
+      }
+    },
+    "sweeper": {
+      "hp": 30,
+      "speed": 30,
+      "radius": 3,
+      "symbol": null,
+      "can_attack": false,
+      "hollow": true,
+      "fov": 360,
+      "turn_rate": 90,
+      "los": 0,
+      "weapon": {
+        "name": "Laser",
+        "damage": 0,
+        "range": 60,
+        "cooldown": 1.0
+      }
+    },
+    "command_center": {
+      "hp": 1000,
+      "speed": 0,
+      "radius": 10,
+      "symbol": null,
+      "can_attack": true,
+      "fov": 360,
+      "turn_rate": 180,
+      "los": 200,
+      "is_building": true,
+      "weapon": {
+        "name": "Laser",
+        "damage": 15,
+        "range": 80,
+        "cooldown": 1.5
+      }
+    },
+    "metal_extractor": {
+      "hp": 150,
+      "speed": 0,
+      "radius": 5,
+      "symbol": null,
+      "can_attack": false,
+      "fov": 360,
+      "turn_rate": 0,
+      "los": 50,
+      "is_building": true
+    },
+    "soldier_t2": {
+      "hp": 125,
+      "speed": 40,
+      "radius": 6,
+      "symbol": null,
+      "can_attack": true,
+      "fov": 90,
+      "turn_rate": 90,
+      "los": 100,
+      "weapon": {
+        "name": "Laser",
+        "damage": 12,
+        "range": 60,
+        "cooldown": 1.5
+      },
+      "is_t2": true
+    },
+    "medic_t2": {
+      "hp": 75,
+      "speed": 60,
+      "radius": 6,
+      "symbol": [
+        [
+          -4,
+          -12
+        ],
+        [
+          4,
+          -12
+        ],
+        [
+          4,
+          -4
+        ],
+        [
+          12,
+          -4
+        ],
+        [
+          12,
+          4
+        ],
+        [
+          4,
+          4
+        ],
+        [
+          4,
+          12
+        ],
+        [
+          -4,
+          12
+        ],
+        [
+          -4,
+          4
+        ],
+        [
+          -12,
+          4
+        ],
+        [
+          -12,
+          -4
+        ],
+        [
+          -4,
+          -4
+        ]
+      ],
+      "can_attack": true,
+      "fov": 30,
+      "turn_rate": 90,
+      "los": 90,
+      "weapon": {
+        "name": "HealLaser",
+        "damage": -8,
+        "range": 60,
+        "cooldown": 0.5,
+        "hits_only_friendly": true,
+        "laser_flash_duration": 0.4
+      },
+      "is_t2": true
+    },
+    "tank_t2": {
+      "hp": 400,
+      "speed": 20,
+      "radius": 9,
+      "symbol": [
+        [
+          -4,
+          -12
+        ],
+        [
+          4,
+          -12
+        ],
+        [
+          12,
+          -4
+        ],
+        [
+          12,
+          4
+        ],
+        [
+          4,
+          12
+        ],
+        [
+          -4,
+          12
+        ],
+        [
+          -12,
+          4
+        ],
+        [
+          -12,
+          -4
+        ]
+      ],
+      "can_attack": true,
+      "fov": 150,
+      "turn_rate": 50,
+      "los": 80,
+      "weapon": {
+        "name": "Laser",
+        "damage": 10,
+        "range": 50,
+        "cooldown": 2.0
+      },
+      "is_t2": true
+    },
+    "sniper_t2": {
+      "hp": 75,
+      "speed": 40,
+      "radius": 6,
+      "symbol": [
+        [
+          -4,
+          -12
+        ],
+        [
+          0,
+          -4
+        ],
+        [
+          4,
+          -12
+        ],
+        [
+          12,
+          -4
+        ],
+        [
+          4,
+          0
+        ],
+        [
+          12,
+          4
+        ],
+        [
+          4,
+          12
+        ],
+        [
+          0,
+          4
+        ],
+        [
+          -4,
+          12
+        ],
+        [
+          -12,
+          4
+        ],
+        [
+          -4,
+          0
+        ],
+        [
+          -12,
+          -4
+        ]
+      ],
+      "can_attack": true,
+      "fov": 35,
+      "turn_rate": 50,
+      "los": 135,
+      "weapon": {
+        "name": "Heavy Laser",
+        "damage": 55,
+        "range": 150,
+        "cooldown": 5.0,
+        "laser_width": 3,
+        "sound": "laser",
+        "lock_on_time": 1.25
+      },
+      "is_t2": true
+    },
+    "machine_gunner_t2": {
+      "hp": 80,
+      "speed": 40,
+      "radius": 6,
+      "symbol": [
+        [
+          -10,
+          -10
+        ],
+        [
+          10,
+          -10
+        ],
+        [
+          10,
+          10
+        ],
+        [
+          -10,
+          10
+        ]
+      ],
+      "can_attack": true,
+      "fov": 60,
+      "turn_rate": 15,
+      "los": 100,
+      "weapon": {
+        "name": "Laser",
+        "damage": 6,
+        "range": 60,
+        "cooldown": 0.4,
+        "laser_flash_duration": 0.1
+      },
+      "is_t2": true
+    },
+    "scout_t2": {
+      "hp": 12,
+      "speed": 110,
+      "radius": 4,
+      "symbol": [
+        [
+          0,
+          -12
+        ],
+        [
+          8,
+          4
+        ],
+        [
+          -8,
+          4
+        ]
+      ],
+      "can_attack": true,
+      "fov": 30,
+      "turn_rate": 150,
+      "los": 120,
+      "spawn_count": 5,
+      "weapon": {
+        "name": "Laser",
+        "damage": 5,
+        "range": 50,
+        "cooldown": 0.5,
+        "laser_flash_duration": 0.1
+      },
+      "is_t2": true
+    },
+    "shockwave_t2": {
+      "hp": 50,
+      "speed": 30,
+      "radius": 6,
+      "symbol": [
+        [
+          0,
+          -12
+        ],
+        [
+          12,
+          0
+        ],
+        [
+          0,
+          12
+        ],
+        [
+          -12,
+          0
+        ]
+      ],
+      "can_attack": true,
+      "fov": 360,
+      "turn_rate": 180,
+      "los": 100,
+      "weapon": {
+        "name": "ChainLaser",
+        "damage": 15,
+        "range": 80,
+        "cooldown": 3.0,
+        "chain_range": 40.0,
+        "chain_delay": 0.1
+      },
+      "is_t2": true
+    },
+    "artillery_t2": {
+      "hp": 75,
+      "speed": 15,
+      "radius": 9,
+      "symbol": [
+        [
+          0,
+          -12
+        ],
+        [
+          4.755,
+          -3.881
+        ],
+        [
+          11.417,
+          -3.804
+        ],
+        [
+          6.18,
+          1.902
+        ],
+        [
+          7.608,
+          9.511
+        ],
+        [
+          0,
+          5
+        ],
+        [
+          -7.608,
+          9.511
+        ],
+        [
+          -6.18,
+          1.902
+        ],
+        [
+          -11.417,
+          -3.804
+        ],
+        [
+          -4.755,
+          -3.881
+        ]
+      ],
+      "can_attack": true,
+      "fov": 15,
+      "turn_rate": 15,
+      "los": 180,
+      "weapon": {
+        "name": "ArtilleryCannon",
+        "damage": 70,
+        "range": 180,
+        "cooldown": 6.0,
+        "splash_radius": 60,
+        "splash_damage_max": 60,
+        "splash_damage_min": 5,
+        "charge_time": 2.5,
+        "friendly_fire": true,
+        "sound": "artillery",
+        "laser_width": 6,
+        "laser_flash_duration": 2.5
+      },
+      "is_t2": true
+    },
+    "engineer_t2": {
+      "hp": 65,
+      "speed": 50,
+      "radius": 6,
+      "symbol": [
+        [
+          -12,
+          -8
+        ],
+        [
+          -8,
+          -12
+        ],
+        [
+          12,
+          8
+        ],
+        [
+          8,
+          12
+        ]
+      ],
+      "can_attack": true,
+      "fov": 360,
+      "turn_rate": 90,
+      "los": 110,
+      "weapon": {
+        "name": "Laser",
+        "damage": 7,
+        "range": 70,
+        "cooldown": 1.0,
+        "laser_flash_duration": 0.1
+      },
+      "is_t2": true
+    },
+    "sweeper_t2": {
+      "hp": 30,
+      "speed": 30,
+      "radius": 3,
+      "symbol": null,
+      "can_attack": false,
+      "hollow": true,
+      "fov": 360,
+      "turn_rate": 90,
+      "los": 0,
+      "weapon": {
+        "name": "Laser",
+        "damage": 0,
+        "range": 60,
+        "cooldown": 1.0
+      },
+      "is_t2": true
+    }
+  },
+  "t2_names": {
+    "soldier": "Marine",
+    "medic": "Priest",
+    "tank": "Heavy Tank",
+    "sniper": "Marksman",
+    "machine_gunner": "Plasma Beamer",
+    "scout": "Drone Swarm",
+    "shockwave": "Disruptor",
+    "artillery": "Mortar",
+    "engineer": "Mechanic"
+  },
+  "spawnable_types": [
+    "soldier",
+    "medic",
+    "tank",
+    "sniper",
+    "machine_gunner",
+    "scout",
+    "shockwave",
+    "artillery",
+    "engineer",
+    "sweeper"
+  ],
+  "building_types": [
+    "command_center",
+    "metal_extractor"
+  ],
+  "unit_passives": {
+    "soldier": [],
+    "medic": [
+      {
+        "name": "Heal Beam",
+        "desc": "Heals friendly units instead of dealing damage: 2 HP per pulse every 0.4s (~5.0 HP/s)."
+      }
+    ],
+    "tank": [
+      {
+        "name": "Reactive Armor",
+        "desc": "Every 5s gain a charge (max 2). Each charge reduces incoming damage by 50%. All charges are consumed when hit."
+      }
+    ],
+    "sniper": [
+      {
+        "name": "Lock-On",
+        "desc": "Locks onto a target for 1.25s before firing. Once locked, the shot always fires — even if the target dies first. Cannot move while locking on."
+      }
+    ],
+    "machine_gunner": [],
+    "scout": [
+      {
+        "name": "Pack Hunter",
+        "desc": "Spawns in groups of 3."
+      }
+    ],
+    "shockwave": [
+      {
+        "name": "Chain Lightning",
+        "desc": "Laser chains to nearby enemies within 40px after a 0.1s delay."
+      }
+    ],
+    "artillery": [
+      {
+        "name": "Charged Shot",
+        "desc": "Locks a ground position and fires after a 2.5s charge. Splash hits everything within 40px for 40-1 damage — including allies."
+      }
+    ],
+    "engineer": [
+      {
+        "name": "Overclock",
+        "desc": "Allied metal extractors within 70px gain +1 HP/s regeneration and an extra +2% spawn boost."
+      }
+    ],
+    "sweeper": [
+      {
+        "name": "Detection",
+        "desc": "Nearby allied sweepers stack line of sight (+50 per sweeper, max +200). Allied units in range gain +5 attack range per sweeper (max +20)."
+      }
+    ],
+    "command_center": [
+      {
+        "name": "Unit Production",
+        "desc": "Spawns a unit every 10s. Metal extractors boost spawn speed."
+      },
+      {
+        "name": "Defensive Laser",
+        "desc": "Fires at the closest enemy within 75px for 20 damage every 1s."
+      }
+    ],
+    "metal_extractor": [
+      {
+        "name": "Spawn Boost",
+        "desc": "Provides +8% spawn speed to its Command Center."
+      },
+      {
+        "name": "Reinforce",
+        "desc": "Builds plating every 15s (max 4). At full stacks gains +100 HP and 2x spawn bonus."
+      }
+    ],
+    "soldier_t2": [
+      {
+        "name": "Combat Stim",
+        "desc": "For every 10 missing HP: -0.1s weapon cooldown and +5% movement speed."
+      }
+    ],
+    "medic_t2": [
+      {
+        "name": "Heal Beam",
+        "desc": "Heals friendly units instead of dealing damage: 8 HP per pulse every 0.5s (~16.0 HP/s)."
+      }
+    ],
+    "tank_t2": [
+      {
+        "name": "Electric Armor",
+        "desc": "Gains a stack every 3s (max 5). While any stacks are active: 60% damage reduction. Each stack: +0.25 HP/s regen, +15% speed. Loses one stack when hit."
+      }
+    ],
+    "sniper_t2": [
+      {
+        "name": "Lock-On",
+        "desc": "Locks onto a target for 1.25s before firing. Once locked, the shot always fires — even if the target dies first. Cannot move while locking on."
+      }
+    ],
+    "machine_gunner_t2": [],
+    "scout_t2": [
+      {
+        "name": "Swarm",
+        "desc": "Spawns in groups of 5."
+      }
+    ],
+    "shockwave_t2": [
+      {
+        "name": "Arc Lightning",
+        "desc": "Laser chains to nearby enemies within 40px after a 0.1s delay."
+      }
+    ],
+    "artillery_t2": [
+      {
+        "name": "Charged Shot",
+        "desc": "Locks a ground position and fires after a 2.5s charge. Splash hits everything within 60px for 60-5 damage — including allies."
+      }
+    ],
+    "engineer_t2": [
+      {
+        "name": "Overclock",
+        "desc": "Allied metal extractors within 70px gain +2 HP/s regeneration and an extra +3% spawn boost."
+      }
+    ],
+    "sweeper_t2": [
+      {
+        "name": "Detection",
+        "desc": "Nearby allied sweepers stack line of sight (+50 per sweeper, max +200). Allied units in range gain +5 attack range per sweeper (max +20)."
+      }
+    ]
+  },
+  "ability_descriptions": {
+    "reinforce": "Builds plating every 15s (max 4). At full stacks gains +100 HP and 2x spawn bonus.",
+    "reactive_armor": "Every 5s gain a charge (max 2). Each charge reduces incoming damage by 50%. All charges are consumed when hit.",
+    "lock_on": "Locks onto a target for 1.25s before firing. Once locked, the shot always fires — even if the target dies first. Cannot move while locking on.",
+    "electric_armor": "Gains a stack every 3s (max 5). While any stacks are active: 60% damage reduction. Each stack: +0.25 HP/s regen, +15% speed. Loses one stack when hit.",
+    "combat_stim": "For every 10 missing HP: -0.1s weapon cooldown and +5% movement speed.",
+    "overclock": "Allied metal extractors within 70px gain +1 HP/s regeneration (T2: +2) and an extra +2% (T2: +3%) spawn boost.",
+    "detection": "Nearby allied sweepers stack line of sight (+50 per sweeper, max +200). Allied units in range gain +5 attack range per sweeper (max +20)."
+  },
+  "guide_topics": [
+    {
+      "title": "Overview",
+      "lines": [
+        "AIRTS is an AI Real-Time Strategy game built for the BlueOrange AI Jam.",
+        "",
+        "Two teams compete to destroy each other's Command Center. Each team can be controlled by a human player or an AI controller.",
+        "",
+        "Games end when a Command Center is destroyed, or both are destroyed simultaneously (draw).",
+        "",
+        "Build units, capture metal spots for faster spawning, and use tactical movement to outplay your opponent."
+      ]
+    },
+    {
+      "title": "Selection & Movement",
+      "lines": [
+        "LEFT CLICK on a unit to select it. Hold SHIFT to add to selection.",
+        "",
+        "LEFT CLICK + DRAG draws a circle selection around multiple units.",
+        "",
+        "RIGHT CLICK + DRAG draws a movement path. Selected units are distributed along the path using nearest-neighbor assignment.",
+        "",
+        "RIGHT CLICK on a single point to move all selected units there.",
+        "",
+        "When a Command Center is selected, RIGHT CLICK sets a rally point for newly spawned units."
+      ]
+    },
+    {
+      "title": "Combat & Fire Modes",
+      "lines": [
+        "Units with 'can_attack = True' automatically fire at enemies within range.",
+        "",
+        "Attacks are laser-based with damage, range, and cooldown stats.",
+        "",
+        "Command Centers also have a defensive laser that fires at nearby enemies.",
+        "",
+        "Medics do not attack but heal nearby friendly units instead.",
+        "",
+        "Combat is resolved every frame — position your units wisely to focus fire and avoid taking unnecessary damage."
+      ]
+    },
+    {
+      "title": "Command Centers",
+      "lines": [
+        "Each team starts with one Command Center (CC).",
+        "",
+        "CCs spawn units every 10s. Click the GUI panel at the bottom to choose which unit type to spawn.",
+        "",
+        "CCs have a defensive laser (range 75, damage 20, cooldown 1s).",
+        "",
+        "Metal Extractors boost the CC's spawn speed by 8% each.",
+        "",
+        "If your CC is destroyed, you lose!"
+      ]
+    },
+    {
+      "title": "Metal Spots & Economy",
+      "lines": [
+        "Metal Spots are golden circles scattered across the map.",
+        "",
+        "Send units near a Metal Spot to capture it. The capture progress depends on how many units are within range.",
+        "",
+        "Once captured, a Metal Extractor is built on the spot.",
+        "",
+        "Each Metal Extractor (200 HP) boosts your CC's spawn speed by 8%, and can later be upgraded into an Outpost or a Research Lab.",
+        "",
+        "Extractors can be destroyed by the enemy team.",
+        "",
+        "Controlling metal spots gives you a significant unit production advantage."
+      ]
+    },
+    {
+      "title": "Unit Overview",
+      "lines": [
+        "Click here to open the interactive Unit Overview browser, where you can inspect each unit type's symbol, stats, and special abilities."
+      ]
+    }
+  ],
+  "command_center": {
+    "hp": 1000,
+    "radius": 10.0,
+    "spawn_interval": 10.0,
+    "spawn_range": 50.0,
+    "laser_range": 75.0,
+    "laser_damage": 20,
+    "laser_cooldown": 1.0
+  },
+  "metal": {
+    "extractor_hp": 200,
+    "spawn_bonus": 0.08,
+    "capture_radius": 15.0
+  }
+}

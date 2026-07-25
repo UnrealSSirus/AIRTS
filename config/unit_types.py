@@ -85,7 +85,7 @@ UNIT_TYPES = {
         "symbol": SNIPER_SYMBOL, "can_attack": True,
         "fov": 35, "turn_rate": 50, "los": 125,
         "weapon": {"name": "Heavy Laser", "damage": 40, "range": 140, "cooldown": 6.0,
-                   "laser_width": 3, "sound": "laser"},
+                   "laser_width": 3, "sound": "laser", "lock_on_time": 1.25},
     },
     "machine_gunner": {
         "hp": 70, "speed": 40, "radius": 5,
@@ -183,7 +183,7 @@ UNIT_TYPES = {
         "symbol": SNIPER_SYMBOL, "can_attack": True,
         "fov": 35, "turn_rate": 50, "los": 135,
         "weapon": {"name": "Heavy Laser", "damage": 55, "range": 150, "cooldown": 5.0,
-                   "laser_width": 3, "sound": "laser"},
+                   "laser_width": 3, "sound": "laser", "lock_on_time": 1.25},
         "is_t2": True,
     },
     "machine_gunner_t2": {

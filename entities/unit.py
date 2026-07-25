@@ -13,7 +13,7 @@ from config.settings import (
 from config.unit_types import UNIT_TYPES
 from core.helpers import angle_diff
 from systems.abilities import (
-    ReactiveArmor, ElectricArmor, Focus, CombatStim, Overclock, Detection,
+    ReactiveArmor, ElectricArmor, LockOn, CombatStim, Overclock, Detection,
     ability_from_dict,
 )
 
@@ -86,6 +86,7 @@ class Unit(CircleEntity, Damageable):
                 splash_damage_min=wdata.get("splash_damage_min", 0.0),
                 laser_flash_duration=wdata.get("laser_flash_duration", 0.0),
                 charge_time=wdata.get("charge_time", 0.0),
+                lock_on_time=wdata.get("lock_on_time", 0.0),
                 friendly_fire=wdata.get("friendly_fire", False),
             )
         else:
@@ -131,6 +132,10 @@ class Unit(CircleEntity, Damageable):
         self._charge_pos: tuple[float, float] | None = None  # locked world position
         self._charge_timer: float = 0.0                      # seconds remaining
 
+        # -- lock-on state (snipers) -------------------------------------------
+        self._lock_target: Entity | None = None  # unit being locked onto
+        self._lock_timer: float = 0.0            # seconds until the shot fires
+
         # -- targeting data (populated every 15 ticks by Game) -------------------
         self.nearest_enemy: Unit | None = None       # vectorized nearest enemy
         self.nearest_ally: Unit | None = None        # vectorized nearest ally
@@ -147,7 +152,7 @@ class Unit(CircleEntity, Damageable):
         elif unit_type == "tank_t2":
             self.abilities = [ElectricArmor()]
         elif unit_type in ("sniper", "sniper_t2"):
-            self.abilities = [Focus()]
+            self.abilities = [LockOn()]
         elif unit_type == "soldier_t2":
             self.abilities = [CombatStim()]
         elif unit_type == "engineer":
@@ -359,6 +364,8 @@ class Unit(CircleEntity, Damageable):
     def _update_movement(self, dt: float):
         if self._charge_pos is not None:
             return  # locked in place while charging
+        if self._lock_target is not None:
+            return  # rooted while locking onto a target
         if self.target is None:
             return
 
@@ -581,6 +588,8 @@ class Unit(CircleEntity, Damageable):
             "abilities": [a.to_dict() for a in self.abilities],
             "_charge_pos": list(self._charge_pos) if self._charge_pos else None,
             "_charge_timer": self._charge_timer,
+            "_lock_target_id": self._lock_target.entity_id if self._lock_target else None,
+            "_lock_timer": self._lock_timer,
             "is_t2": self.is_t2,
             "command_queue": [
                 {k: v for k, v in entry.items() if k != "_target_ref"}
@@ -614,16 +623,14 @@ class Unit(CircleEntity, Damageable):
         u._follow_dist = data["_follow_dist"]
         if "abilities" in data:
             u.abilities = [ability_from_dict(a) for a in data["abilities"]]
-            for ab in u.abilities:
-                if isinstance(ab, Focus) and ab.timer > 0 and ab._base_speed > 0:
-                    t = ab.timer / Focus.DURATION
-                    u.speed = ab._base_speed * (Focus.MIN_MULT + (1.0 - Focus.MIN_MULT) * (1.0 - t))
         cp = data.get("_charge_pos")
         u._charge_pos = tuple(cp) if cp else None
         u._charge_timer = data.get("_charge_timer", 0.0)
+        u._lock_timer = data.get("_lock_timer", 0.0)
         u.is_t2 = data.get("is_t2", False)
         u.command_queue = data.get("command_queue", [])
         # cross-references resolved later by Game.load_state()
         u._follow_entity = None
         u.attack_target = None
+        u._lock_target = None
         return u

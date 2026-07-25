@@ -20,3 +20,4 @@ class Weapon:
     splash_damage_min: float = 0.0  # damage at splash edge (linear falloff)
     laser_flash_duration: float = 0.0  # 0 = use global default
     charge_time: float = 0.0   # 0 = fire immediately; >0 = lock target pos and delay
+    lock_on_time: float = 0.0  # 0 = fire immediately; >0 = lock onto target unit, root, then fire

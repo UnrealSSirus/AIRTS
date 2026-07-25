@@ -5,9 +5,25 @@
 import { copyFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { execSync } from "node:child_process";
 
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(webRoot, "..");
+
+// Regenerate the build-time game data (docs tables + src/generated/gamedata.json)
+// from the Python config so the Learn to Play screen always matches the game.
+// Best-effort: a web-only checkout keeps the committed gamedata.json.
+const genScript = join(repoRoot, "tools", "gen_docs.py");
+if (existsSync(genScript)) {
+  try {
+    execSync(`python "${genScript}"`, { stdio: "pipe" });
+    console.log("sync-assets: regenerated gamedata.json from config/");
+  } catch {
+    console.warn(
+      "sync-assets: gamedata generation failed (python unavailable?) — keeping committed gamedata.json",
+    );
+  }
+}
 
 const MAPPING = [
   ["sounds/laser.mp3", "public/sounds/laser.mp3"],

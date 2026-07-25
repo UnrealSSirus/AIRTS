@@ -76,6 +76,11 @@ export const TG_BORDER: RGB = [70, 70, 100];
 export const TG_TEXT: RGB = [220, 220, 240];
 export const TG_FONT_SIZE = 16;
 
+// -- sidebar (guides / unit overview) --
+export const SIDEBAR_BG: RGB = [20, 20, 32];
+export const SIDEBAR_WIDTH = 200;
+export const SIDEBAR_BTN_HEIGHT = 36;
+
 // -- content / headings --
 export const CONTENT_TEXT: RGB = [200, 200, 220];
 export const CONTENT_HEADING: RGB = [220, 220, 240];

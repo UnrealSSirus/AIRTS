@@ -35,7 +35,7 @@ const MENU_ITEMS: [string, string, boolean][] = [
   ["Multiplayer", "connect", true],
   ["AI Arena", "arena", false],
   ["Replays", "replays", false],
-  ["Learn to Play", "guides", false],
+  ["Learn to Play", "guides", true],
   ["Options", "options", false],
 ];
 

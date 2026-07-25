@@ -201,6 +201,39 @@ def combat_step(
                     sound_events.append(wpn.sound)
             continue  # skip normal combat logic while charging or just fired
 
+        # -- Active lock-on: count down, then the shot ALWAYS fires ------------
+        # The sniper is rooted while locked (see Unit._update_movement). If the
+        # target dies mid-lock the shot still fires at its corpse — wasted
+        # damage is the whole point of the rework (no more perfect overkill-
+        # free micro in group fights).
+        if a._lock_target is not None:
+            tgt = a._lock_target
+            a._facing_target = tgt
+            a._lock_timer -= dt
+            if a._lock_timer <= 0:
+                a._lock_target = None
+                a.laser_cooldown = a_cd  # cooldown starts once the shot fires
+                tx, ty = tgt.x, tgt.y
+                if tgt.alive:
+                    tgt.take_damage(a_dmg)
+                    if stats is not None:
+                        tt = tgt.team if hasattr(tgt, "team") else 0
+                        if tt:
+                            stats.record_damage(a.team, tt, a_dmg)
+                            if not tgt.alive:
+                                stats.record_kill(a.team, tt)
+                if a.abilities:
+                    for ability in a.abilities:
+                        ability.on_fire(a)
+                laser_flashes.append(
+                    LaserFlash(ax, ay, tx, ty, wpn.laser_color, wpn.laser_width,
+                               source=a, target=tgt if tgt.alive else None,
+                               duration=wpn.laser_flash_duration)
+                )
+                if sound_events is not None:
+                    sound_events.append(wpn.sound)
+            continue  # busy locking on / just fired — skip normal combat
+
         # -- Artillery ground-attack: fire at a specific world position ----------
         # While attack_ground_pos is set, skip normal combat entirely so the
         # artillery doesn't fire at other targets while waiting to rotate.
@@ -295,7 +328,13 @@ def combat_step(
                                 best_target = enemy
 
         if best_target is not None:
-            if wpn.charge_time > 0:
+            if wpn.lock_on_time > 0:
+                # Begin lock-on — root in place; the shot fires unconditionally
+                # after lock_on_time elapses (handled above).
+                a._lock_target = best_target
+                a._lock_timer = wpn.lock_on_time
+                # Cooldown starts only after the shot fires, not now
+            elif wpn.charge_time > 0:
                 # Initiate charge — lock onto target's CURRENT world position
                 a._charge_pos = (best_target.x, best_target.y)
                 a._charge_timer = wpn.charge_time

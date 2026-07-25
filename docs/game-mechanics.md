@@ -6,79 +6,110 @@ Destroy the enemy team's **Command Center** (CC). Each team starts with one CC; 
 
 ## Command Centers
 
-| Property           | Value                      |
-|--------------------|----------------------------|
-| HP                 | 1000                       |
-| Spawn interval     | 10 seconds (base)          |
-| Spawn radius       | 50 px around the CC        |
-| Healing aura radius| 40 px                      |
-| Healing aura rate  | 5 HP/s to nearby friendly units |
-| Defensive laser range | 75 px                   |
-| Defensive laser damage | 20                      |
-| Defensive laser cooldown | 1.0 s                 |
-| Default spawn type | Soldier                    |
+<!-- AUTOGEN:cc-stats (regenerate with `python tools/gen_docs.py` — do not edit by hand) -->
+| Property | Value |
+|----------|-------|
+| HP | 1000 |
+| Spawn interval | 10 s (base) |
+| Spawn radius | 50 px around the CC |
+| Defensive laser range | 75 px |
+| Defensive laser damage | 20 |
+| Defensive laser cooldown | 1 s |
+| Default spawn type | Soldier |
+<!-- /AUTOGEN:cc-stats -->
 
 Command Centers are hexagonal structures placed symmetrically on opposite sides of the map. They automatically:
-- **Spawn units** of the selected type every 10 seconds (boosted by metal extractors).
-- **Heal nearby friendly units** within 40 px at 5 HP/s.
-- **Fire a defensive laser** at the closest enemy within 75 px, dealing 20 damage with a 1-second cooldown.
+- **Spawn units** of the selected type on a fixed interval (boosted by metal extractors).
+- **Fire a defensive laser** at the closest enemy in range.
 - **Send newly spawned units to a rally point**, if one is set.
 
 CCs start with a full spawn timer so the first unit spawns immediately.
 
 ## Units
 
-There are eight unit types plus T2 variants of each:
+Every Tier 1 unit type has a Tier 2 variant unlocked by building a **Research Lab** from a captured metal extractor. All T2 variants are suffixed `_t2` (e.g. `"soldier_t2"`).
 
 ### Tier 1 Units
 
-| Type            | HP  | Speed | Radius | Damage | Range | Cooldown | Special                                           |
-|-----------------|-----|-------|--------|--------|-------|----------|---------------------------------------------------|
-| Soldier         | 100 | 40    | 5      | 10     | 50    | 1.5 s    | Basic all-rounder                                 |
-| Medic           | 50  | 40    | 5      | —      | 50    | 0.3 s    | Heals nearby allies with a heal laser             |
-| Tank            | 250 | 20    | 7      | 7      | 50    | 2.0 s    | High HP, larger radius; **ReactiveArmor** passive |
-| Sniper          | 50  | 30    | 5      | 35     | 140   | 6.0 s    | Long range, high damage, fragile; **Focus** passive |
-| Machine Gunner  | 70  | 40    | 5      | 1      | 50    | 0.1 s    | Very fast fire rate, low per-shot damage          |
-| Scout           | 15  | 90    | 4      | 4      | 15    | 0.5 s    | Spawns 3 per spawn cycle; fast but fragile        |
-| Shockwave       | 70  | 30    | 5      | 7      | 60    | 3.0 s    | Chain laser — bounces to nearby enemies (70 px)   |
-| Artillery       | 50  | 20    | 10     | 100    | 160   | 6.0 s    | Massive splash (40 px radius); **friendly fire**; charge time 2 s |
+<!-- AUTOGEN:t1-units -->
+| Type | HP | Speed | Radius | Damage | Range | Cooldown | Special |
+|------|----|-------|--------|--------|-------|----------|---------|
+| `soldier` | 100 | 40 | 5 | 10 | 50 | 1.5 s | Basic all-rounder |
+| `medic` | 50 | 40 | 5 | — | 60 | 0.4 s | Support healer; **Heal Beam** |
+| `tank` | 250 | 20 | 7 | 8 | 45 | 2 s | Frontline damage soak; **Reactive Armor** |
+| `sniper` | 50 | 35 | 5 | 40 | 140 | 6 s | Long-range assassin; **Lock-On** |
+| `machine_gunner` | 70 | 40 | 5 | 4 | 50 | 0.4 s | Sustained rapid fire |
+| `scout` | 15 | 90 | 4 | 3 | 40 | 0.5 s | Fast, fragile swarmer; **Pack Hunter** |
+| `shockwave` | 70 | 30 | 5 | 8 | 60 | 3.5 s | Chain-laser crowd damage; **Chain Lightning** |
+| `artillery` | 50 | 20 | 7 | 50 | 160 | 6 s | Siege splash damage; **Charged Shot** |
+| `engineer` | 50 | 40 | 5 | 3 | 70 | 1 s | Economy support; **Overclock** |
+| `sweeper` | 30 | 30 | 3 | — | — | — | Vision support; **Detection** |
+<!-- /AUTOGEN:t1-units -->
 
 ### Tier 2 Units
 
-T2 units are upgraded variants unlocked by building a **Research Lab** from a captured metal extractor. All T2 variants are suffixed `_t2` (e.g. `"soldier_t2"`).
+<!-- AUTOGEN:t2-units -->
+| Type | HP | Speed | Damage | Range | Cooldown | Key changes vs T1 |
+|------|----|-------|--------|-------|----------|-------------------|
+| `soldier_t2` (Marine) | 125 | 40 | 12 | 60 | 1.5 s | +25 HP, +2 damage, +10 range, **Combat Stim** |
+| `medic_t2` (Priest) | 75 | 60 | — | 60 | 0.5 s | +25 HP, +20 speed, +6 heal, +0.1s cooldown |
+| `tank_t2` (Heavy Tank) | 400 | 20 | 10 | 50 | 2 s | +150 HP, +2 damage, +5 range, **Electric Armor** |
+| `sniper_t2` (Marksman) | 75 | 40 | 55 | 150 | 5 s | +25 HP, +5 speed, +15 damage, +10 range, -1s cooldown |
+| `machine_gunner_t2` (Plasma Beamer) | 80 | 40 | 6 | 60 | 0.4 s | +10 HP, +2 damage, +10 range |
+| `scout_t2` (Drone Swarm) | 12 | 110 | 5 | 50 | 0.5 s | -3 HP, +20 speed, +2 damage, +10 range, spawns 5 per cycle (was 3), **Swarm** |
+| `shockwave_t2` (Disruptor) | 50 | 30 | 15 | 80 | 3 s | -20 HP, +7 damage, +20 range, -0.5s cooldown, **Arc Lightning** |
+| `artillery_t2` (Mortar) | 75 | 15 | 70 | 180 | 6 s | +25 HP, -5 speed, +20 damage, +20 range, +20 splash radius |
+| `engineer_t2` (Mechanic) | 65 | 50 | 7 | 70 | 1 s | +15 HP, +10 speed, +4 damage |
+| `sweeper_t2` (Sweeper T2) | 30 | 30 | — | — | — | — |
+<!-- /AUTOGEN:t2-units -->
 
-| Type               | HP  | Speed | Damage | Range | Cooldown | Key changes vs T1                                       |
-|--------------------|-----|-------|--------|-------|----------|---------------------------------------------------------|
-| `soldier_t2`       | 125 | 42    | 15     | 55    | 1.4 s    | More HP, damage, and range                              |
-| `medic_t2`         | 75  | 60    | —      | 70    | 0.2 s    | Faster and longer-ranged healer                         |
-| `tank_t2`          | 400 | 20    | 7      | 50    | 2.0 s    | More HP; **ElectricArmor** passive                      |
-| `sniper_t2`        | 65  | 35    | 45     | 150   | 5.0 s    | More HP and damage, faster fire                         |
-| `machine_gunner_t2`| 80  | 30    | 3      | 75    | 0.1 s    | More HP, longer range, higher damage per shot           |
-| `scout_t2`         | 12  | 110   | 5      | 30    | 0.3 s    | Spawns 6 per cycle; even faster                         |
-| `shockwave_t2`     | 50  | 30    | 15     | 90    | 3.0 s    | Higher damage and range; shorter chain range (50 px)    |
-| `artillery_t2`     | 120 | 15    | 100    | 180   | 6.0 s    | More HP, longer range; massive splash (75 px); charge 3 s |
+### Unit Traits & Details
 
-### Medic Details
+<!-- AUTOGEN:unit-details -->
+#### Soldier / Marine (T2)
 
-- Fires a **heal laser** (`hits_only_friendly = True`) that heals nearby allies instead of damaging them.
-- Damage value is negative (−1 per tick at 0.3 s cooldown = effectively heals ~3.3 HP/s per shot).
-- Prioritizes the closest wounded allies within 50 px.
+- **Combat Stim** (T2): For every 10 missing HP: -0.1s weapon cooldown and +5% movement speed.
 
-### Scout Details
+#### Medic / Priest (T2)
 
-- Spawns **3 units** per CC spawn cycle (T2: **6 units**).
-- Very short attack range (15 px / 30 px T2) — effective at swarming, not dueling.
+- **Heal Beam** (T1): Heals friendly units instead of dealing damage: 2 HP per pulse every 0.4s (~5.0 HP/s).
+- **Heal Beam** (T2): Heals friendly units instead of dealing damage: 8 HP per pulse every 0.5s (~16.0 HP/s).
 
-### Shockwave / Chain Laser
+#### Tank / Heavy Tank (T2)
 
-- On each attack, the laser **chains** to additional enemies within the chain range (70 px / 50 px T2).
-- Chain delay between bounces: 0.2 s (T2: 0.1 s).
+- **Reactive Armor** (T1): Every 5s gain a charge (max 2). Each charge reduces incoming damage by 50%. All charges are consumed when hit.
+- **Electric Armor** (T2): Gains a stack every 3s (max 5). While any stacks are active: 60% damage reduction. Each stack: +0.25 HP/s regen, +15% speed. Loses one stack when hit.
 
-### Artillery Details
+#### Sniper / Marksman (T2)
 
-- Has a **charge time** of 2 s (T2: 3 s) before each shot fires.
-- **Splash damage** hits all units (friend and foe) within the blast radius.
-- Very narrow field of view (15°) and slow turn rate (45°/s) — requires facing the target.
+- **Lock-On** (T1): Locks onto a target for 1.25s before firing. Once locked, the shot always fires — even if the target dies first. Cannot move while locking on.
+- **Lock-On** (T2): Locks onto a target for 1.25s before firing. Once locked, the shot always fires — even if the target dies first. Cannot move while locking on.
+
+#### Scout / Drone Swarm (T2)
+
+- **Pack Hunter** (T1): Spawns in groups of 3.
+- **Swarm** (T2): Spawns in groups of 5.
+
+#### Shockwave / Disruptor (T2)
+
+- **Chain Lightning** (T1): Laser chains to nearby enemies within 40px after a 0.1s delay.
+- **Arc Lightning** (T2): Laser chains to nearby enemies within 40px after a 0.1s delay.
+
+#### Artillery / Mortar (T2)
+
+- **Charged Shot** (T1): Locks a ground position and fires after a 2.5s charge. Splash hits everything within 40px for 40-1 damage — including allies.
+- **Charged Shot** (T2): Locks a ground position and fires after a 2.5s charge. Splash hits everything within 60px for 60-5 damage — including allies.
+
+#### Engineer / Mechanic (T2)
+
+- **Overclock** (T1): Allied metal extractors within 70px gain +1 HP/s regeneration and an extra +2% spawn boost.
+- **Overclock** (T2): Allied metal extractors within 70px gain +2 HP/s regeneration and an extra +3% spawn boost.
+
+#### Sweeper / Sweeper T2 (T2)
+
+- **Detection** (T1): Nearby allied sweepers stack line of sight (+50 per sweeper, max +200). Allied units in range gain +5 attack range per sweeper (max +20).
+- **Detection** (T2): Nearby allied sweepers stack line of sight (+50 per sweeper, max +200). Allied units in range gain +5 attack range per sweeper (max +20).
+<!-- /AUTOGEN:unit-details -->
 
 ## Combat
 
@@ -113,12 +144,35 @@ Command Centers always fire at the closest enemy within range (75 px). They do n
 
 Certain unit types carry passive abilities that activate automatically.
 
-| Ability         | Unit         | Effect                                                                                     |
-|-----------------|--------------|--------------------------------------------------------------------------------------------|
-| **ReactiveArmor** | Tank (T1)  | Gains a charge every 5 s (max 2). Each charge reduces incoming damage by 50%. Loses all charges when hit. |
-| **ElectricArmor** | Tank T2    | Gains a stack every 1 s (max 8). Each stack: 60% damage reduction, +1 HP/s regen, +20% speed. Loses one stack per hit. |
-| **Focus**         | Sniper (T1) | After firing, speed drops to 25% and gradually recovers over 3 seconds.                  |
-| **Reinforce**     | Metal Extractor | Builds plating stacks over time (4 stacks, 15 s each). At full stacks, gains +100 HP and doubles spawn bonus. |
+<!-- AUTOGEN:passives -->
+| Unit | Ability | Effect |
+|------|---------|--------|
+| Medic | **Heal Beam** | Heals friendly units instead of dealing damage: 2 HP per pulse every 0.4s (~5.0 HP/s). |
+| Tank | **Reactive Armor** | Every 5s gain a charge (max 2). Each charge reduces incoming damage by 50%. All charges are consumed when hit. |
+| Sniper | **Lock-On** | Locks onto a target for 1.25s before firing. Once locked, the shot always fires — even if the target dies first. Cannot move while locking on. |
+| Scout | **Pack Hunter** | Spawns in groups of 3. |
+| Shockwave | **Chain Lightning** | Laser chains to nearby enemies within 40px after a 0.1s delay. |
+| Artillery | **Charged Shot** | Locks a ground position and fires after a 2.5s charge. Splash hits everything within 40px for 40-1 damage — including allies. |
+| Engineer | **Overclock** | Allied metal extractors within 70px gain +1 HP/s regeneration and an extra +2% spawn boost. |
+| Sweeper | **Detection** | Nearby allied sweepers stack line of sight (+50 per sweeper, max +200). Allied units in range gain +5 attack range per sweeper (max +20). |
+| Command Center | **Unit Production** | Spawns a unit every 10s. Metal extractors boost spawn speed. |
+| Command Center | **Defensive Laser** | Fires at the closest enemy within 75px for 20 damage every 1s. |
+| Metal Extractor | **Spawn Boost** | Provides +8% spawn speed to its Command Center. |
+| Metal Extractor | **Reinforce** | Builds plating every 15s (max 4). At full stacks gains +100 HP and 2x spawn bonus. |
+| Marine (T2) | **Combat Stim** | For every 10 missing HP: -0.1s weapon cooldown and +5% movement speed. |
+| Priest (T2) | **Heal Beam** | Heals friendly units instead of dealing damage: 8 HP per pulse every 0.5s (~16.0 HP/s). |
+| Heavy Tank (T2) | **Electric Armor** | Gains a stack every 3s (max 5). While any stacks are active: 60% damage reduction. Each stack: +0.25 HP/s regen, +15% speed. Loses one stack when hit. |
+| Marksman (T2) | **Lock-On** | Locks onto a target for 1.25s before firing. Once locked, the shot always fires — even if the target dies first. Cannot move while locking on. |
+| Drone Swarm (T2) | **Swarm** | Spawns in groups of 5. |
+| Disruptor (T2) | **Arc Lightning** | Laser chains to nearby enemies within 40px after a 0.1s delay. |
+| Mortar (T2) | **Charged Shot** | Locks a ground position and fires after a 2.5s charge. Splash hits everything within 60px for 60-5 damage — including allies. |
+| Mechanic (T2) | **Overclock** | Allied metal extractors within 70px gain +2 HP/s regeneration and an extra +3% spawn boost. |
+| Sweeper T2 (T2) | **Detection** | Nearby allied sweepers stack line of sight (+50 per sweeper, max +200). Allied units in range gain +5 attack range per sweeper (max +20). |
+| Command Center | **Unit Production** | Spawns a unit every 10s. Metal extractors boost spawn speed. |
+| Command Center | **Defensive Laser** | Fires at the closest enemy within 75px for 20 damage every 1s. |
+| Metal Extractor | **Spawn Boost** | Provides +8% spawn speed to its Command Center. |
+| Metal Extractor | **Reinforce** | Builds plating every 15s (max 4). At full stacks gains +100 HP and 2x spawn bonus. |
+<!-- /AUTOGEN:passives -->
 
 ## Metal Spots & Extractors
 
@@ -134,23 +188,27 @@ Metal spots are neutral resource nodes scattered symmetrically across the map. C
 
 ### Metal Extractor Stats
 
-| Property        | Value  |
-|-----------------|--------|
-| HP              | 150    |
-| Spawn boost     | +8% additive per extractor |
+<!-- AUTOGEN:extractor-stats -->
+| Property | Value |
+|----------|-------|
+| HP | 200 |
+| Spawn boost | +8% additive per extractor |
+<!-- /AUTOGEN:extractor-stats -->
 
-Each extractor owned by a CC adds an 8% multiplicative boost to the CC's spawn timer rate. Metal extractors are **selectable** — clicking one shows its health bar and info.
+Each extractor's spawn boost stacks additively per extractor owned by a CC. Metal extractors are **selectable** — clicking one shows its health bar and info.
 
 ### T2 Extractor Upgrades
 
 A captured metal extractor can be upgraded (when T2 is enabled) into one of two structures:
 
-| Structure        | Effect                                                   |
-|------------------|----------------------------------------------------------|
-| **Outpost**      | Fires a defensive laser (75 px range, 15 dmg, 2 s CD); heals self at 1 HP/s; extended line of sight; +20% spawn bonus |
-| **Research Lab** | Enables T2 unit spawns from the CC; +20% spawn bonus; +100 CC max HP |
+<!-- AUTOGEN:upgrades -->
+| Structure | Upgrade time | Effect |
+|-----------|--------------|--------|
+| **Outpost** | 30 s | Fires a defensive laser (75 px range, 15 dmg, 2 s CD); heals self at 1 HP/s; +50 HP; extended line of sight (140 px); +20% spawn bonus |
+| **Research Lab** | 60 s | Enables T2 unit spawns from the CC; +20% spawn bonus; +100 CC max HP |
 
-Upgrades take 60 seconds to complete during which the extractor provides no spawn bonus.
+During an upgrade the extractor provides no spawn bonus.
+<!-- /AUTOGEN:upgrades -->
 
 ## Map Layout
 
